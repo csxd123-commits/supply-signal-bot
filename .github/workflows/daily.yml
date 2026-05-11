@@ -14,7 +14,9 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: seen_urls.json
-          key: seen-urls-cache
+          key: seen-urls-${{ github.run_id }}
+          restore-keys: |
+            seen-urls-
 
       - uses: actions/setup-python@v5
         with:
