@@ -1,5 +1,5 @@
 """
-공급망 시그널 텔레그램 봇 v10 - 고유명사 기반 중복 제거
+공급망 시그널 텔레그램 봇 v11
 """
 
 import requests
@@ -169,8 +169,8 @@ def collect_all_news():
         print(f"  [{q}] 신규 {new_cnt}건")
         time.sleep(0.5)
 
-    order = {"H": 0, "M": 1, "L": 2}
-    all_articles.sort(key=lambda x: order.get(x.get("severity", "L"), 2))
+    # 최신순 정렬
+    all_articles.sort(key=lambda x: x.get("pub_dt") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     result = all_articles[:MAX_RESULTS]
     print(f"  최종 {len(result)}건")
     return result
@@ -188,21 +188,17 @@ def build_message(items):
 
     lines = [
         "📡 <b>공급망 시그널 리포트</b>",
-        f"{today} ({DAYS_LIMIT}일 이내)",
-        f"총 {len(items)}건 | 🔴{h} 🟡{m} 🟢{l}",
+        f"{today} ({DAYS_LIMIT}일 이내) · 총 {len(items)}건",
         "─" * 22,
     ]
     for item in items:
-        sev   = item.get("severity", "L")
-        emoji = SEV_EMOJI.get(sev, "⚪")
-        label = SEV_LABEL.get(sev, "")
         kw    = html_escape(item.get("keyword", ""))
         title = html_escape(item.get("title", ""))
         src   = html_escape(item.get("source", ""))
         pub   = item.get("pub", "")
         url   = item.get("link", "")
 
-        lines.append(f"\n{emoji} <b>[{label}]</b> #{kw}")
+        lines.append(f"\n🔹 #{kw}")
         if url:
             lines.append(f'<a href="{url}">{title}</a>')
         else:
