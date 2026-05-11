@@ -3,15 +3,23 @@ name: 공급망 시그널 봇
 on:
   schedule:
     - cron: '0 * * * *'
-  workflow_dispatch: 
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: seen_urls.json
+          key: seen-urls-cache
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - run: pip install requests schedule
+
       - run: python supply_signal_bot.py --once
