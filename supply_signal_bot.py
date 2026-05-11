@@ -1,5 +1,5 @@
 """
-공급망 시그널 텔레그램 봇 v15
+공급망 시그널 텔레그램 봇 v16
 - 한/영 통합 수집, 최신순 정렬
 - 외신 쿼리 en-US 적용
 - KST 시간 표시
@@ -99,15 +99,34 @@ def extract_entities(title):
     return korean | english
 
 
+# 일반 공급망 용어 — 고유명사 판단에서 제외
+COMMON_WORDS = {
+    "공급망", "해상공급망", "공급부족", "공급위기", "생산차질", "공급망위기",
+    "수급불안", "재고부족", "납기지연", "병목현상", "쇼티지", "리드타임",
+    "원자재", "반도체", "semiconductor", "shortage", "supply", "chain",
+    "bottleneck", "capacity", "disruption", "inventory", "manufacturing",
+}
+
+
 def is_duplicate(new_title, seen_titles):
-    new_entities = extract_entities(new_title)
+    # 고유명사: 4글자 이상이면서 일반 공급망 용어가 아닌 것
+    def get_proper_nouns(title):
+        korean  = set(re.findall(r'[가-힣]{4,}', title)) - COMMON_WORDS
+        english = set(w.lower() for w in re.findall(r'[A-Za-z]{5,}', title)) - COMMON_WORDS
+        return korean | english
+
+    new_nouns = get_proper_nouns(new_title)
     new_words = set(w for w in re.sub(r'[^\w]', ' ', new_title).split() if len(w) >= 2)
+
     for old_title in seen_titles:
-        if new_entities & extract_entities(old_title):
+        old_nouns = get_proper_nouns(old_title)
+        # 회사명/브랜드명 겹치면 중복
+        if new_nouns and old_nouns and (new_nouns & old_nouns):
             return True
+        # 전체 단어 60% 이상 겹치면 중복
         old_words = set(w for w in re.sub(r'[^\w]', ' ', old_title).split() if len(w) >= 2)
         if new_words and old_words:
-            if len(new_words & old_words) / min(len(new_words), len(old_words)) >= 0.45:
+            if len(new_words & old_words) / min(len(new_words), len(old_words)) >= 0.60:
                 return True
     return False
 
