@@ -1,9 +1,10 @@
 """
-공급망 시그널 텔레그램 봇 v17
+공급망 시그널 텔레그램 봇 v18
 - 한/영 통합 수집, 최신순 정렬
 - 외신 쿼리 en-US 적용
 - KST 시간 표시
 - 고유명사 기반 중복 제거
+- 24시간 이내 이전 기사 중복 제거
 """
 
 import requests
@@ -11,6 +12,8 @@ import schedule
 import time
 import re
 import xml.etree.ElementTree as ET
+import json
+import os
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 
@@ -19,6 +22,7 @@ TELEGRAM_TOKEN   = "8796878101:AAHRbfnsrUZKhX0h4ZneFZcmIV4tzbu_NKo"
 TELEGRAM_CHAT_ID = "-1003984467582"
 MAX_RESULTS      = 12
 DAYS_LIMIT       = 3
+SEEN_FILE        = "seen_urls.json"
 # ──────────────────────────────────────────────────────────────────────────────
 
 EXCLUDE_KEYWORDS = [
@@ -78,6 +82,22 @@ EN_QUERIES = [
 ALL_QUERIES = KO_QUERIES + EN_QUERIES
 
 
+def load_seen_urls():
+    if os.path.exists(SEEN_FILE):
+        with open(SEEN_FILE, "r") as f:
+            data = json.load(f)
+        # 24시간 이내 것만 유지
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        return {k: v for k, v in data.items()
+                if datetime.fromisoformat(v) > cutoff}
+    return {}
+
+
+def save_seen_urls(seen: dict):
+    with open(SEEN_FILE, "w") as f:
+        json.dump(seen, f)
+
+
 def parse_pub_date(date_str):
     try:
         return parsedate_to_datetime(date_str).astimezone(timezone.utc)
@@ -131,7 +151,6 @@ COMMON_WORDS = {
 
 
 def is_duplicate(new_title, seen_titles):
-    # 고유명사: 4글자 이상이면서 일반 공급망 용어가 아닌 것
     def get_proper_nouns(title):
         korean  = set(re.findall(r'[가-힣]{4,}', title)) - COMMON_WORDS
         english = set(w.lower() for w in re.findall(r'[A-Za-z]{5,}', title)) - COMMON_WORDS
@@ -142,10 +161,8 @@ def is_duplicate(new_title, seen_titles):
 
     for old_title in seen_titles:
         old_nouns = get_proper_nouns(old_title)
-        # 회사명/브랜드명 겹치면 중복
         if new_nouns and old_nouns and (new_nouns & old_nouns):
             return True
-        # 전체 단어 60% 이상 겹치면 중복
         old_words = set(w for w in re.sub(r'[^\w]', ' ', old_title).split() if len(w) >= 2)
         if new_words and old_words:
             if len(new_words & old_words) / min(len(new_words), len(old_words)) >= 0.60:
@@ -250,6 +267,20 @@ def build_message(items):
     return "\n".join(lines)
 
 
+def build_no_news_message():
+    kst_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=9)))
+    today   = kst_now.strftime("%Y년 %m월 %d일 %H:%M")
+    return (
+        "📡 <b>공급망 시그널 리포트</b>\n"
+        f"{today} KST\n"
+        "─" * 22 + "\n\n"
+        "🔕 새 기사 없음\n"
+        "이전 1시간 대비 신규 기사가 없습니다.\n\n"
+        "─" * 22 + "\n"
+        "supply_signal_bot"
+    )
+
+
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     ok  = True
@@ -267,12 +298,32 @@ def send_telegram(message):
 
 
 def run_once():
+    seen_urls = load_seen_urls()  # 이전 24시간 기사 불러오기
+
     items = collect_all_news()
+
     if not items:
         print("  수집된 뉴스 없음")
+        send_telegram(build_no_news_message())
         return
-    ok = send_telegram(build_message(items))
-    print(f"  텔레그램 전송 {'완료' if ok else '실패'}")
+
+    # 이전에 보낸 기사 URL 제외
+    new_items = [a for a in items if a["link"] not in seen_urls]
+
+    if not new_items:
+        print("  새 기사 없음 (전부 중복)")
+        send_telegram(build_no_news_message())
+        return
+
+    ok = send_telegram(build_message(new_items))
+
+    if ok:
+        now_str = datetime.now(timezone.utc).isoformat()
+        for a in new_items:
+            seen_urls[a["link"]] = now_str
+        save_seen_urls(seen_urls)
+
+    print(f"  텔레그램 전송 {'완료' if ok else '실패'} ({len(new_items)}건)")
 
 
 def run_scheduler():
