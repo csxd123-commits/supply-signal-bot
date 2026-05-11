@@ -1,5 +1,5 @@
 """
-공급망 시그널 텔레그램 봇 v12 - 한/영/중 외신 추가
+공급망 시그널 텔레그램 봇 v13
 """
 
 import requests
@@ -14,7 +14,7 @@ from email.utils import parsedate_to_datetime
 TELEGRAM_TOKEN   = "8796878101:AAHRbfnsrUZKhX0h4ZneFZcmIV4tzbu_NKo"
 TELEGRAM_CHAT_ID = "1178221090"
 MAX_RESULTS      = 12
-DAYS_LIMIT       = 2
+DAYS_LIMIT       = 3
 # ──────────────────────────────────────────────────────────────────────────────
 
 EXCLUDE_KEYWORDS = [
@@ -63,8 +63,8 @@ SEV_EMOJI = {"H": "🔴", "M": "🟡", "L": "🟢"}
 QUERY_CONFIGS = (
     [(q, "ko", "KR", "KR:ko") for q in KO_QUERIES] +
     [(q, "en", "US", "US:en") for q in EN_QUERIES] +
-    [(q, "en", "TW", "TW:en") for q in TW_QUERIES] +
-    [(q, "en", "HK", "HK:en") for q in CN_QUERIES]
+    [(q, "en", "US", "US:en") for q in TW_QUERIES] +
+    [(q, "en", "US", "US:en") for q in CN_QUERIES]
 )
 
 
@@ -104,8 +104,8 @@ def extract_keyword(title):
 
 
 def extract_entities(title):
-    korean = set(re.findall(r'[가-힣]{5,}', title))
-    english = set(w.lower() for w in re.findall(r'[A-Za-z]{5,}', title))
+    korean = set(re.findall(r'[가-힣]{4,}', title))
+    english = set(w.lower() for w in re.findall(r'[A-Za-z]{4,}', title))
     return korean | english
 
 
@@ -191,7 +191,8 @@ def html_escape(text):
 
 
 def build_message(items):
-    today = datetime.now().strftime("%Y년 %m월 %d일 %H:%M")
+    kst_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=9)))
+    today = kst_now.strftime("%Y년 %m월 %d일 %H:%M")
     kr = sum(1 for i in items if i.get("region") == "🇰🇷")
     gl = len(items) - kr
 
