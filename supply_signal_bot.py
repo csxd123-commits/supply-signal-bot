@@ -1,5 +1,5 @@
 """
-공급망 시그널 텔레그램 봇 v11
+공급망 시그널 텔레그램 봇 v12 - 한/영/중 외신 추가
 """
 
 import requests
@@ -13,8 +13,8 @@ from email.utils import parsedate_to_datetime
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = "8796878101:AAHRbfnsrUZKhX0h4ZneFZcmIV4tzbu_NKo"
 TELEGRAM_CHAT_ID = "1178221090"
-MAX_RESULTS      = 10
-DAYS_LIMIT       = 3
+MAX_RESULTS      = 12
+DAYS_LIMIT       = 2
 # ──────────────────────────────────────────────────────────────────────────────
 
 EXCLUDE_KEYWORDS = [
@@ -24,19 +24,48 @@ EXCLUDE_KEYWORDS = [
     "소통 창구", "對국민", "국민 소통",
 ]
 
-HIGH_KEYWORDS = ["공급 중단", "생산 중단", "전면 중단", "폭등", "위기 심화", "급감", "대란"]
-MID_KEYWORDS  = ["쇼티지", "공급부족", "공급 부족", "수급불안", "납기지연", "생산차질",
-                 "재고부족", "병목", "리드타임", "shortage", "bottleneck", "수급 불안", "급등"]
-LOW_KEYWORDS  = ["증설", "공급망", "수급", "조달", "재고", "물량"]
-
-GOOGLE_NEWS_QUERIES = [
+# 한국어 쿼리
+KO_QUERIES = [
     "쇼티지", "공급부족", "병목 공급망", "리드타임",
     "납기지연", "수급불안", "재고부족", "생산차질",
-    "공급망 위기", "증설 공장", "shortage", "bottleneck",
+    "공급망 위기", "증설 공장",
+]
+
+# 영어 쿼리 (미국·글로벌)
+EN_QUERIES = [
+    "supply shortage 2025",
+    "chip shortage semiconductor",
+    "supply chain bottleneck",
+    "lead time increase manufacturing",
+    "raw material shortage",
+    "capacity expansion factory",
+    "supply disruption industry",
+    "inventory shortage production",
+]
+
+# 대만 쿼리 (TSMC·반도체)
+TW_QUERIES = [
+    "TSMC supply shortage",
+    "Taiwan semiconductor bottleneck",
+    "chip supply Taiwan",
+]
+
+# 중국 쿼리 (원자재·제조)
+CN_QUERIES = [
+    "China supply chain shortage",
+    "China raw material bottleneck",
+    "China factory production shortage",
 ]
 
 SEV_EMOJI = {"H": "🔴", "M": "🟡", "L": "🟢"}
-SEV_LABEL = {"H": "고위험", "M": "중위험", "L": "저위험"}
+
+# 쿼리별 언어 설정 (Google News 파라미터)
+QUERY_CONFIGS = (
+    [(q, "ko", "KR", "KR:ko") for q in KO_QUERIES] +
+    [(q, "en", "US", "US:en") for q in EN_QUERIES] +
+    [(q, "en", "TW", "TW:en") for q in TW_QUERIES] +
+    [(q, "en", "HK", "HK:en") for q in CN_QUERIES]
+)
 
 
 def parse_pub_date(date_str):
@@ -53,61 +82,41 @@ def is_excluded(title):
     return False
 
 
-def classify_severity(title):
-    for kw in HIGH_KEYWORDS:
-        if kw in title:
-            return "H"
-    for kw in MID_KEYWORDS:
-        if kw in title:
-            return "M"
-    return "L"
-
-
 def extract_keyword(title):
     kw_map = {
-        "쇼티지": "쇼티지", "shortage": "쇼티지",
+        "쇼티지": "쇼티지", "shortage": "shortage",
         "공급부족": "공급부족", "공급 부족": "공급부족",
-        "병목": "병목", "bottleneck": "병목",
-        "리드타임": "리드타임",
+        "병목": "병목", "bottleneck": "bottleneck",
+        "리드타임": "리드타임", "lead time": "lead time",
         "납기지연": "납기지연", "납기 지연": "납기지연",
-        "생산차질": "생산차질", "생산 차질": "생산차질",
-        "재고부족": "재고부족", "재고 부족": "재고부족",
-        "수급불안": "수급불안", "수급 불안": "수급불안",
-        "증설": "증설",
+        "생산차질": "생산차질", "disruption": "disruption",
+        "재고부족": "재고부족", "inventory": "inventory",
+        "수급불안": "수급불안",
+        "증설": "증설", "capacity": "capacity",
+        "chip": "chip shortage", "semiconductor": "반도체",
+        "TSMC": "TSMC",
     }
+    title_lower = title.lower()
     for k, v in kw_map.items():
-        if k in title:
+        if k.lower() in title_lower:
             return v
     return "공급망"
 
 
 def extract_entities(title):
-    """5글자 이상 연속 한글/영문 단어 추출 — 회사명·제품명 해당"""
-    # 한글 5글자 이상
     korean = set(re.findall(r'[가-힣]{5,}', title))
-    # 영문 5글자 이상 (대소문자 무관)
     english = set(w.lower() for w in re.findall(r'[A-Za-z]{5,}', title))
     return korean | english
 
 
 def is_duplicate(new_title, seen_titles):
-    """
-    두 가지 기준 중 하나라도 해당하면 중복:
-    1. 핵심 단어 45% 이상 겹침
-    2. 5글자 이상 고유명사가 1개 이상 겹침
-    """
     new_words = set(w for w in re.sub(r'[^\w]', ' ', new_title).split() if len(w) >= 2)
     new_entities = extract_entities(new_title)
-
     for old_title in seen_titles:
-        old_words = set(w for w in re.sub(r'[^\w]', ' ', old_title).split() if len(w) >= 2)
         old_entities = extract_entities(old_title)
-
-        # 고유명사 겹침 체크
         if new_entities & old_entities:
             return True
-
-        # 단어 비율 체크
+        old_words = set(w for w in re.sub(r'[^\w]', ' ', old_title).split() if len(w) >= 2)
         if new_words and old_words:
             overlap = len(new_words & old_words) / min(len(new_words), len(old_words))
             if overlap >= 0.45:
@@ -115,10 +124,10 @@ def is_duplicate(new_title, seen_titles):
     return False
 
 
-def fetch_google_news(query):
+def fetch_google_news(query, hl, gl, ceid):
     url = (
         "https://news.google.com/rss/search"
-        f"?q={requests.utils.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
+        f"?q={requests.utils.quote(query)}&hl={hl}&gl={gl}&ceid={ceid}"
     )
     cutoff = datetime.now(timezone.utc) - timedelta(days=DAYS_LIMIT)
     try:
@@ -131,7 +140,7 @@ def fetch_google_news(query):
             link    = item.findtext("link", "").strip()
             pub_raw = item.findtext("pubDate", "").strip()
             source_el = item.find("source")
-            source  = source_el.text if source_el is not None else "Google News"
+            source  = source_el.text if source_el is not None else "외신"
             pub_dt  = parse_pub_date(pub_raw)
             if pub_dt and pub_dt < cutoff:
                 continue
@@ -139,16 +148,17 @@ def fetch_google_news(query):
                 continue
             kst = timezone(timedelta(hours=9))
             pub_str = pub_dt.astimezone(kst).strftime("%m/%d %H:%M") if pub_dt else ""
+            region = "🇰🇷" if gl == "KR" else "🇺🇸" if gl == "US" else "🇹🇼" if gl == "TW" else "🇨🇳"
             items.append({
                 "title": title, "link": link, "source": source,
                 "pub": pub_str, "pub_dt": pub_dt,
-                "severity": classify_severity(title),
                 "keyword": extract_keyword(title),
+                "region": region,
             })
         items.sort(key=lambda x: x["pub_dt"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-        return items[:15]
+        return items[:8]
     except Exception as e:
-        print(f"  오류 ({query}): {e}")
+        print(f"  오류 ({query[:20]}): {e}")
         return []
 
 
@@ -157,8 +167,8 @@ def collect_all_news():
     all_articles = []
     seen_titles = []
 
-    for q in GOOGLE_NEWS_QUERIES:
-        items = fetch_google_news(q)
+    for q, hl, gl, ceid in QUERY_CONFIGS:
+        items = fetch_google_news(q, hl, gl, ceid)
         new_cnt = 0
         for a in items:
             if is_duplicate(a["title"], seen_titles):
@@ -166,10 +176,10 @@ def collect_all_news():
             seen_titles.append(a["title"])
             all_articles.append(a)
             new_cnt += 1
-        print(f"  [{q}] 신규 {new_cnt}건")
-        time.sleep(0.5)
+        if new_cnt > 0:
+            print(f"  [{q[:18]}] 신규 {new_cnt}건")
+        time.sleep(0.3)
 
-    # 최신순 정렬
     all_articles.sort(key=lambda x: x.get("pub_dt") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     result = all_articles[:MAX_RESULTS]
     print(f"  최종 {len(result)}건")
@@ -181,24 +191,24 @@ def html_escape(text):
 
 
 def build_message(items):
-    today = datetime.now().strftime("%Y년 %m월 %d일")
-    h = sum(1 for i in items if i.get("severity") == "H")
-    m = sum(1 for i in items if i.get("severity") == "M")
-    l = sum(1 for i in items if i.get("severity") == "L")
+    today = datetime.now().strftime("%Y년 %m월 %d일 %H:%M")
+    kr = sum(1 for i in items if i.get("region") == "🇰🇷")
+    gl = len(items) - kr
 
     lines = [
         "📡 <b>공급망 시그널 리포트</b>",
-        f"{today} ({DAYS_LIMIT}일 이내) · 총 {len(items)}건",
+        f"{today} · 총 {len(items)}건 (🇰🇷{kr} 🌐{gl})",
         "─" * 22,
     ]
     for item in items:
-        kw    = html_escape(item.get("keyword", ""))
-        title = html_escape(item.get("title", ""))
-        src   = html_escape(item.get("source", ""))
-        pub   = item.get("pub", "")
-        url   = item.get("link", "")
+        kw     = html_escape(item.get("keyword", ""))
+        title  = html_escape(item.get("title", ""))
+        src    = html_escape(item.get("source", ""))
+        pub    = item.get("pub", "")
+        url    = item.get("link", "")
+        region = item.get("region", "")
 
-        lines.append(f"\n🔹 #{kw}")
+        lines.append(f"\n{region} <b>#{kw}</b>")
         if url:
             lines.append(f'<a href="{url}">{title}</a>')
         else:
