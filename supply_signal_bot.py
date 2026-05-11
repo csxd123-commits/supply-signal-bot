@@ -16,7 +16,7 @@ from email.utils import parsedate_to_datetime
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = "8796878101:AAHRbfnsrUZKhX0h4ZneFZcmIV4tzbu_NKo"
-TELEGRAM_CHAT_ID = "1178221090"
+TELEGRAM_CHAT_ID = "-1003984467582"
 MAX_RESULTS      = 12
 DAYS_LIMIT       = 3
 # ──────────────────────────────────────────────────────────────────────────────
