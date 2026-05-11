@@ -2,7 +2,7 @@ name: 공급망 시그널 봇
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -26,12 +26,10 @@ jobs:
 
       - name: Fix smart quotes
         run: |
-          sed -i 's/\xe2\x80\x9c/"/g; s/\xe2\x80\x9d/"/g; s/\xe2\x80\x98/'"'"'/g; s/\xe2\x80\x99/'"'"'/g' supply_signal_bot.py
-
-      - run: python supply_signal_bot.py --once
-        with:
-          python-version: '3.11'
-
-      - run: pip install requests schedule
+          python3 -c "
+          content = open('supply_signal_bot.py', encoding='utf-8').read()
+          content = content.replace('\u201c', '\"').replace('\u201d', '\"').replace('\u2018', \"'\").replace('\u2019', \"'\")
+          open('supply_signal_bot.py', 'w', encoding='utf-8').write(content)
+          "
 
       - run: python supply_signal_bot.py --once
