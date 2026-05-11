@@ -1,5 +1,5 @@
 """
-공급망 시그널 텔레그램 봇 v5
+공급망 시그널 텔레그램 봇 v6 - plain text 버전
 """
 
 import requests
@@ -20,7 +20,6 @@ MAX_RESULTS      = 20
 DAYS_LIMIT       = 3
 # ──────────────────────────────────────────────────────────────────────────────
 
-# 키워드 하나씩 단순하게 — 검색결과 많아짐
 GOOGLE_NEWS_QUERIES = [
     "쇼티지",
     "공급부족",
@@ -45,14 +44,14 @@ SEV_EMOJI = {"H": "🔴", "M": "🟡", "L": "🟢"}
 SEV_LABEL = {"H": "고위험", "M": "중위험", "L": "저위험"}
 
 
-def parse_pub_date(date_str: str):
+def parse_pub_date(date_str):
     try:
         return parsedate_to_datetime(date_str).astimezone(timezone.utc)
     except Exception:
         return None
 
 
-def fetch_google_news(query: str) -> list:
+def fetch_google_news(query):
     url = (
         "https://news.google.com/rss/search"
         f"?q={requests.utils.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
@@ -69,14 +68,12 @@ def fetch_google_news(query: str) -> list:
             pub_raw = item.findtext("pubDate", "").strip()
             source_el = item.find("source")
             source  = source_el.text if source_el is not None else "Google News"
-
-            pub_dt = parse_pub_date(pub_raw)
+            pub_dt  = parse_pub_date(pub_raw)
             if pub_dt and pub_dt < cutoff:
                 continue
-
-            pub_str = pub_dt.astimezone(timezone(timedelta(hours=9))).strftime("%m/%d %H:%M") if pub_dt else ""
+            kst = timezone(timedelta(hours=9))
+            pub_str = pub_dt.astimezone(kst).strftime("%m/%d %H:%M") if pub_dt else ""
             items.append({"title": title, "link": link, "source": source, "pub": pub_str, "pub_dt": pub_dt})
-
         items.sort(key=lambda x: x["pub_dt"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
         return items[:10]
     except Exception as e:
@@ -84,7 +81,7 @@ def fetch_google_news(query: str) -> list:
         return []
 
 
-def classify_with_gemini(articles: list) -> list:
+def classify_with_gemini(articles):
     if not articles:
         return []
     today = datetime.now().strftime("%Y-%m-%d")
@@ -92,39 +89,24 @@ def classify_with_gemini(articles: list) -> list:
         f"{i+1}. [{a['source']}] {a['title']}"
         for i, a in enumerate(articles)
     ])
-    prompt = f"""다음 뉴스 제목들을 분석해서 공급망 이슈(병목/쇼티지/리드타임/증설 등) 관련성을 판단하고 JSON으로만 응답해줘.
-공급망과 무관한 기사는 제외.
+    prompt = f"""다음 뉴스 제목들의 공급망 이슈 심각도를 분류해줘. JSON 배열로만 응답.
 
 {article_list}
 
-[{{
-  "index": 번호,
-  "summary": "2문장 한국어 요약. 어떤 품목/산업이 왜 영향받는지",
-  "keyword": "병목|쇼티지|리드타임|증설|공급부족|납기지연|생산차질|재고부족|수급불안 중 1개",
-  "severity": "H|M|L",
-  "impact": "영향받는 산업/기업 한 줄"
-}}]
+[{{"index": 번호, "summary": "2문장 요약", "keyword": "병목|쇼티지|리드타임|증설|공급부족|납기지연|생산차질|재고부족|수급불안 중 1개", "severity": "H|M|L", "impact": "영향 산업 한 줄"}}]
 
-H=즉각적 공급중단/가격폭등, M=수급불안/상승압력, L=잠재리스크
-JSON만 반환. 오늘: {today}"""
+H=즉각적공급중단, M=수급불안, L=잠재리스크. 공급망 무관 기사 제외. JSON만. 오늘:{today}"""
 
     try:
         resp = requests.post(
             GEMINI_URL,
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.1, "maxOutputTokens": 3000},
-            },
+            json={"contents": [{"parts": [{"text": prompt}]}],
+                  "generationConfig": {"temperature": 0.1, "maxOutputTokens": 3000}},
             timeout=30,
         )
         resp.raise_for_status()
         data = resp.json()
-        text = (
-            data.get("candidates", [{}])[0]
-            .get("content", {})
-            .get("parts", [{}])[0]
-            .get("text", "")
-        )
+        text = (data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", ""))
         s, e = text.find("["), text.rfind("]")
         if s < 0 or e < 0:
             return _fallback(articles)
@@ -150,19 +132,16 @@ JSON만 반환. 오늘: {today}"""
         return _fallback(articles)
 
 
-def _fallback(articles: list) -> list:
-    return [{
-        "title": a["title"], "summary": "", "keyword": "공급망",
-        "severity": "M", "impact": "", "source": a["source"],
-        "pub": a.get("pub", ""), "url": a["link"]
-    } for a in articles]
+def _fallback(articles):
+    return [{"title": a["title"], "summary": "", "keyword": "공급망",
+             "severity": "M", "impact": "", "source": a["source"],
+             "pub": a.get("pub", ""), "url": a["link"]} for a in articles]
 
 
-def collect_all_news() -> list:
-    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 수집 시작 ({DAYS_LIMIT}일 이내, {len(GOOGLE_NEWS_QUERIES)}개 키워드)")
+def collect_all_news():
+    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 수집 시작")
     all_articles = []
     seen = set()
-
     for q in GOOGLE_NEWS_QUERIES:
         items = fetch_google_news(q)
         new_cnt = 0
@@ -172,7 +151,7 @@ def collect_all_news() -> list:
                 seen.add(key)
                 all_articles.append(a)
                 new_cnt += 1
-        print(f"  [{q}] {len(items)}건 수집 / 신규 {new_cnt}건")
+        print(f"  [{q}] {len(items)}건 / 신규 {new_cnt}건")
         time.sleep(0.5)
 
     print(f"  총 {len(all_articles)}건 → Gemini 분류 중...")
@@ -183,58 +162,57 @@ def collect_all_news() -> list:
     return classified[:MAX_RESULTS]
 
 
-def escape_md(text: str) -> str:
-    for ch in r"\_*[]()~`>#+-=|{}.!":
-        text = text.replace(ch, f"\\{ch}")
-    return text
-
-
-def build_message(items: list) -> str:
+def build_message(items):
+    """특수문자 없는 plain text 메시지"""
     today = datetime.now().strftime("%Y년 %m월 %d일")
     h = sum(1 for i in items if i.get("severity") == "H")
     m = sum(1 for i in items if i.get("severity") == "M")
     l = sum(1 for i in items if i.get("severity") == "L")
+
     lines = [
-        "📡 *공급망 시그널 리포트*",
-        f"_{escape_md(today)}_ \\({DAYS_LIMIT}일 이내\\)",
-        "",
-        f"총 *{len(items)}건* \\| 🔴{h} 🟡{m} 🟢{l}",
-        escape_md("─" * 24),
+        "📡 공급망 시그널 리포트",
+        f"{today} ({DAYS_LIMIT}일 이내)",
+        f"총 {len(items)}건 | 🔴{h} 🟡{m} 🟢{l}",
+        "─" * 24,
     ]
     for item in items:
         sev   = item.get("severity", "L")
         emoji = SEV_EMOJI.get(sev, "⚪")
         label = SEV_LABEL.get(sev, "")
-        kw    = escape_md(item.get("keyword", ""))
-        title = escape_md(item.get("title", ""))
-        summ  = escape_md(item.get("summary", ""))
-        imp   = escape_md(item.get("impact", ""))
-        src   = escape_md(item.get("source", ""))
-        pub   = escape_md(item.get("pub", ""))
+        kw    = item.get("keyword", "")
+        title = item.get("title", "")
+        summ  = item.get("summary", "")
+        imp   = item.get("impact", "")
+        src   = item.get("source", "")
+        pub   = item.get("pub", "")
         url   = item.get("url", "")
-        lines.append(f"\n{emoji} *\\[{label}\\]* `{kw}`")
-        lines.append(f"[{title}]({url})" if url else f"*{title}*")
+
+        lines.append(f"\n{emoji} [{label}] #{kw}")
+        lines.append(title)
+        if url:
+            lines.append(url)
         if summ:
             lines.append(summ)
         if imp:
-            lines.append(f"↳ _{imp}_")
+            lines.append(f"↳ {imp}")
         foot = []
         if src: foot.append(src)
         if pub: foot.append(pub)
         if foot:
-            lines.append(escape_md(" · ".join(foot)))
-    lines += ["", escape_md("─" * 24), "_supply\\_signal\\_bot_"]
+            lines.append(" · ".join(foot))
+
+    lines += ["", "─" * 24, "supply_signal_bot"]
     return "\n".join(lines)
 
 
-def send_telegram(message: str) -> bool:
+def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     ok = True
     for chunk in [message[i:i+4000] for i in range(0, len(message), 4000)]:
         resp = requests.post(
             url,
             json={"chat_id": TELEGRAM_CHAT_ID, "text": chunk,
-                  "parse_mode": "MarkdownV2", "disable_web_page_preview": True},
+                  "disable_web_page_preview": True},
             timeout=15,
         )
         if not resp.ok:
@@ -253,7 +231,7 @@ def run_once():
 
 
 def run_scheduler():
-    print(f"스케줄러 시작 — 매일 {RUN_TIME} 자동 실행 (Ctrl+C 종료)")
+    print(f"스케줄러 시작 — 매일 {RUN_TIME} 자동 실행")
     schedule.every().day.at(RUN_TIME).do(run_once)
     while True:
         schedule.run_pending()
