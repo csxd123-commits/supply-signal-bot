@@ -1,5 +1,5 @@
 """
-공급망 시그널 텔레그램 봇 v9
+공급망 시그널 텔레그램 봇 v10 - 고유명사 기반 중복 제거
 """
 
 import requests
@@ -24,9 +24,9 @@ EXCLUDE_KEYWORDS = [
     "소통 창구", "對국민", "국민 소통",
 ]
 
-HIGH_KEYWORDS = ["공급 중단", "생산 중단", "전면 중단", "급등", "폭등", "위기 심화", "급감", "대란"]
+HIGH_KEYWORDS = ["공급 중단", "생산 중단", "전면 중단", "폭등", "위기 심화", "급감", "대란"]
 MID_KEYWORDS  = ["쇼티지", "공급부족", "공급 부족", "수급불안", "납기지연", "생산차질",
-                 "재고부족", "병목", "리드타임", "shortage", "bottleneck", "수급 불안"]
+                 "재고부족", "병목", "리드타임", "shortage", "bottleneck", "수급 불안", "급등"]
 LOW_KEYWORDS  = ["증설", "공급망", "수급", "조달", "재고", "물량"]
 
 GOOGLE_NEWS_QUERIES = [
@@ -81,26 +81,37 @@ def extract_keyword(title):
     return "공급망"
 
 
-def get_core_words(title):
-    """제목에서 의미있는 단어만 추출 (조사·기호 제거)"""
-    title = re.sub(r"[^\w\s]", " ", title)
-    words = title.split()
-    # 2글자 이상 단어만
-    return set(w for w in words if len(w) >= 2)
+def extract_entities(title):
+    """5글자 이상 연속 한글/영문 단어 추출 — 회사명·제품명 해당"""
+    # 한글 5글자 이상
+    korean = set(re.findall(r'[가-힣]{5,}', title))
+    # 영문 5글자 이상 (대소문자 무관)
+    english = set(w.lower() for w in re.findall(r'[A-Za-z]{5,}', title))
+    return korean | english
 
 
 def is_duplicate(new_title, seen_titles):
-    """핵심 단어 50% 이상 겹치면 중복"""
-    new_words = get_core_words(new_title)
-    if not new_words:
-        return False
+    """
+    두 가지 기준 중 하나라도 해당하면 중복:
+    1. 핵심 단어 45% 이상 겹침
+    2. 5글자 이상 고유명사가 1개 이상 겹침
+    """
+    new_words = set(w for w in re.sub(r'[^\w]', ' ', new_title).split() if len(w) >= 2)
+    new_entities = extract_entities(new_title)
+
     for old_title in seen_titles:
-        old_words = get_core_words(old_title)
-        if not old_words:
-            continue
-        overlap = len(new_words & old_words) / min(len(new_words), len(old_words))
-        if overlap >= 0.50:
+        old_words = set(w for w in re.sub(r'[^\w]', ' ', old_title).split() if len(w) >= 2)
+        old_entities = extract_entities(old_title)
+
+        # 고유명사 겹침 체크
+        if new_entities & old_entities:
             return True
+
+        # 단어 비율 체크
+        if new_words and old_words:
+            overlap = len(new_words & old_words) / min(len(new_words), len(old_words))
+            if overlap >= 0.45:
+                return True
     return False
 
 
@@ -231,16 +242,16 @@ def run_once():
     print(f"  텔레그램 전송 {'완료' if ok else '실패'}")
 
 
+def run_scheduler():
+    schedule.every().day.at("08:00").do(run_once)
+    while True:
+        schedule.run_pending()
+        time.sleep(30)
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     run_once() if args.once else run_scheduler()
-
-
-def run_scheduler():
-    schedule.every().day.at("08:00").do(run_once)
-    while True:
-        schedule.run_pending()
-        time.sleep(30)
