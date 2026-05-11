@@ -24,4 +24,14 @@ jobs:
 
       - run: pip install requests schedule
 
+      - name: Fix smart quotes
+        run: |
+          sed -i 's/\xe2\x80\x9c/"/g; s/\xe2\x80\x9d/"/g; s/\xe2\x80\x98/'"'"'/g; s/\xe2\x80\x99/'"'"'/g' supply_signal_bot.py
+
+      - run: python supply_signal_bot.py --once
+        with:
+          python-version: '3.11'
+
+      - run: pip install requests schedule
+
       - run: python supply_signal_bot.py --once
