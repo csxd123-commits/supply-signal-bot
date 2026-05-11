@@ -1,5 +1,5 @@
 """
-공급망 시그널 텔레그램 봇 v8 - Gemini 없이 키워드 자체 분류
+공급망 시그널 텔레그램 봇 v9
 """
 
 import requests
@@ -17,7 +17,6 @@ MAX_RESULTS      = 10
 DAYS_LIMIT       = 3
 # ──────────────────────────────────────────────────────────────────────────────
 
-# 제외 키워드 (제목에 있으면 무조건 제외)
 EXCLUDE_KEYWORDS = [
     "부동산", "아파트", "전세금", "월세", "집값", "양도세", "청약", "분양", "임대차",
     "공모주", "전세버스", "선거", "대선", "총선", "의원", "국회",
@@ -25,12 +24,9 @@ EXCLUDE_KEYWORDS = [
     "소통 창구", "對국민", "국민 소통",
 ]
 
-# 고위험 키워드
 HIGH_KEYWORDS = ["공급 중단", "생산 중단", "전면 중단", "급등", "폭등", "위기 심화", "급감", "대란"]
-# 중위험 키워드  
 MID_KEYWORDS  = ["쇼티지", "공급부족", "공급 부족", "수급불안", "납기지연", "생산차질",
-                 "재고부족", "병목", "리드타임", "shortage", "bottleneck"]
-# 저위험 키워드
+                 "재고부족", "병목", "리드타임", "shortage", "bottleneck", "수급 불안"]
 LOW_KEYWORDS  = ["증설", "공급망", "수급", "조달", "재고", "물량"]
 
 GOOGLE_NEWS_QUERIES = [
@@ -58,7 +54,6 @@ def is_excluded(title):
 
 
 def classify_severity(title):
-    """키워드 기반 위험도 자체 분류"""
     for kw in HIGH_KEYWORDS:
         if kw in title:
             return "H"
@@ -69,23 +64,44 @@ def classify_severity(title):
 
 
 def extract_keyword(title):
-    """제목에서 핵심 키워드 추출"""
     kw_map = {
         "쇼티지": "쇼티지", "shortage": "쇼티지",
         "공급부족": "공급부족", "공급 부족": "공급부족",
         "병목": "병목", "bottleneck": "병목",
-        "리드타임": "리드타임", "lead time": "리드타임",
+        "리드타임": "리드타임",
         "납기지연": "납기지연", "납기 지연": "납기지연",
         "생산차질": "생산차질", "생산 차질": "생산차질",
         "재고부족": "재고부족", "재고 부족": "재고부족",
         "수급불안": "수급불안", "수급 불안": "수급불안",
         "증설": "증설",
     }
-    title_lower = title.lower()
     for k, v in kw_map.items():
-        if k in title_lower:
+        if k in title:
             return v
     return "공급망"
+
+
+def get_core_words(title):
+    """제목에서 의미있는 단어만 추출 (조사·기호 제거)"""
+    title = re.sub(r"[^\w\s]", " ", title)
+    words = title.split()
+    # 2글자 이상 단어만
+    return set(w for w in words if len(w) >= 2)
+
+
+def is_duplicate(new_title, seen_titles):
+    """핵심 단어 50% 이상 겹치면 중복"""
+    new_words = get_core_words(new_title)
+    if not new_words:
+        return False
+    for old_title in seen_titles:
+        old_words = get_core_words(old_title)
+        if not old_words:
+            continue
+        overlap = len(new_words & old_words) / min(len(new_words), len(old_words))
+        if overlap >= 0.50:
+            return True
+    return False
 
 
 def fetch_google_news(query):
@@ -119,19 +135,10 @@ def fetch_google_news(query):
                 "keyword": extract_keyword(title),
             })
         items.sort(key=lambda x: x["pub_dt"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-        return items[:10]
+        return items[:15]
     except Exception as e:
         print(f"  오류 ({query}): {e}")
         return []
-
-
-def similar(a, b):
-    """제목 유사도 — 핵심 단어 55% 이상 겹치면 중복"""
-    wa = set(re.sub(r"[^\w]", " ", a).split())
-    wb = set(re.sub(r"[^\w]", " ", b).split())
-    if not wa or not wb:
-        return False
-    return len(wa & wb) / min(len(wa), len(wb)) > 0.55
 
 
 def collect_all_news():
@@ -143,7 +150,7 @@ def collect_all_news():
         items = fetch_google_news(q)
         new_cnt = 0
         for a in items:
-            if any(similar(a["title"], t) for t in seen_titles):
+            if is_duplicate(a["title"], seen_titles):
                 continue
             seen_titles.append(a["title"])
             all_articles.append(a)
@@ -182,7 +189,7 @@ def build_message(items):
         title = html_escape(item.get("title", ""))
         src   = html_escape(item.get("source", ""))
         pub   = item.get("pub", "")
-        url   = item.get("url") or item.get("link", "")
+        url   = item.get("link", "")
 
         lines.append(f"\n{emoji} <b>[{label}]</b> #{kw}")
         if url:
@@ -224,17 +231,16 @@ def run_once():
     print(f"  텔레그램 전송 {'완료' if ok else '실패'}")
 
 
-def run_scheduler():
-    print(f"스케줄러 시작 — 매일 {RUN_TIME} 자동 실행")
-    schedule.every().day.at("08:00").do(run_once)
-    while True:
-        schedule.run_pending()
-        time.sleep(30)
-
-
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     run_once() if args.once else run_scheduler()
+
+
+def run_scheduler():
+    schedule.every().day.at("08:00").do(run_once)
+    while True:
+        schedule.run_pending()
+        time.sleep(30)
