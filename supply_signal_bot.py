@@ -1,5 +1,9 @@
 """
-공급망 시그널 텔레그램 봇 v13
+공급망 시그널 텔레그램 봇 v15
+- 한/영 통합 수집, 최신순 정렬
+- 외신 쿼리 en-US 적용
+- KST 시간 표시
+- 고유명사 기반 중복 제거
 """
 
 import requests
@@ -26,46 +30,33 @@ EXCLUDE_KEYWORDS = [
 
 # 한국어 쿼리
 KO_QUERIES = [
-    "쇼티지", "공급부족", "병목 공급망", "리드타임",
-    "납기지연", "수급불안", "재고부족", "생산차질",
-    "공급망 위기", "증설 공장",
+    ("쇼티지",        "ko", "KR", "KR:ko"),
+    ("공급부족",       "ko", "KR", "KR:ko"),
+    ("병목 공급망",    "ko", "KR", "KR:ko"),
+    ("리드타임",       "ko", "KR", "KR:ko"),
+    ("납기지연",       "ko", "KR", "KR:ko"),
+    ("수급불안",       "ko", "KR", "KR:ko"),
+    ("재고부족",       "ko", "KR", "KR:ko"),
+    ("생산차질",       "ko", "KR", "KR:ko"),
+    ("공급망 위기",    "ko", "KR", "KR:ko"),
+    ("증설 공장",      "ko", "KR", "KR:ko"),
 ]
 
-# 영어 쿼리 (미국·글로벌)
+# 영어 쿼리 (미국/대만/중국 외신)
 EN_QUERIES = [
-    "supply shortage 2025",
-    "chip shortage semiconductor",
-    "supply chain bottleneck",
-    "lead time increase manufacturing",
-    "raw material shortage",
-    "capacity expansion factory",
-    "supply disruption industry",
-    "inventory shortage production",
+    ("semiconductor shortage",          "en-US", "US", "US:en"),
+    ("chip shortage supply",            "en-US", "US", "US:en"),
+    ("supply chain bottleneck",         "en-US", "US", "US:en"),
+    ("raw material shortage",           "en-US", "US", "US:en"),
+    ("TSMC supply constraint",          "en-US", "US", "US:en"),
+    ("Taiwan chip supply",              "en-US", "US", "US:en"),
+    ("China supply chain shortage",     "en-US", "US", "US:en"),
+    ("lead time manufacturing",         "en-US", "US", "US:en"),
+    ("capacity expansion factory",      "en-US", "US", "US:en"),
+    ("supply disruption industry",      "en-US", "US", "US:en"),
 ]
 
-# 대만 쿼리 (TSMC·반도체)
-TW_QUERIES = [
-    "TSMC supply shortage",
-    "Taiwan semiconductor bottleneck",
-    "chip supply Taiwan",
-]
-
-# 중국 쿼리 (원자재·제조)
-CN_QUERIES = [
-    "China supply chain shortage",
-    "China raw material bottleneck",
-    "China factory production shortage",
-]
-
-SEV_EMOJI = {"H": "🔴", "M": "🟡", "L": "🟢"}
-
-# 쿼리별 언어 설정 (Google News 파라미터)
-QUERY_CONFIGS = (
-    [(q, "ko", "KR", "KR:ko") for q in KO_QUERIES] +
-    [(q, "en", "US", "US:en") for q in EN_QUERIES] +
-    [(q, "en", "US", "US:en") for q in TW_QUERIES] +
-    [(q, "en", "US", "US:en") for q in CN_QUERIES]
-)
+ALL_QUERIES = KO_QUERIES + EN_QUERIES
 
 
 def parse_pub_date(date_str):
@@ -88,67 +79,61 @@ def extract_keyword(title):
         "공급부족": "공급부족", "공급 부족": "공급부족",
         "병목": "병목", "bottleneck": "bottleneck",
         "리드타임": "리드타임", "lead time": "lead time",
-        "납기지연": "납기지연", "납기 지연": "납기지연",
+        "납기지연": "납기지연",
         "생산차질": "생산차질", "disruption": "disruption",
         "재고부족": "재고부족", "inventory": "inventory",
         "수급불안": "수급불안",
         "증설": "증설", "capacity": "capacity",
-        "chip": "chip shortage", "semiconductor": "반도체",
-        "TSMC": "TSMC",
+        "chip": "chip", "semiconductor": "반도체",
+        "TSMC": "TSMC", "constraint": "공급제한",
     }
-    title_lower = title.lower()
     for k, v in kw_map.items():
-        if k.lower() in title_lower:
+        if k.lower() in title.lower():
             return v
     return "공급망"
 
 
 def extract_entities(title):
-    korean = set(re.findall(r'[가-힣]{4,}', title))
+    korean  = set(re.findall(r'[가-힣]{4,}', title))
     english = set(w.lower() for w in re.findall(r'[A-Za-z]{4,}', title))
     return korean | english
 
 
 def is_duplicate(new_title, seen_titles):
-    new_words = set(w for w in re.sub(r'[^\w]', ' ', new_title).split() if len(w) >= 2)
     new_entities = extract_entities(new_title)
+    new_words = set(w for w in re.sub(r'[^\w]', ' ', new_title).split() if len(w) >= 2)
     for old_title in seen_titles:
-        old_entities = extract_entities(old_title)
-        if new_entities & old_entities:
+        if new_entities & extract_entities(old_title):
             return True
         old_words = set(w for w in re.sub(r'[^\w]', ' ', old_title).split() if len(w) >= 2)
         if new_words and old_words:
-            overlap = len(new_words & old_words) / min(len(new_words), len(old_words))
-            if overlap >= 0.45:
+            if len(new_words & old_words) / min(len(new_words), len(old_words)) >= 0.45:
                 return True
     return False
 
 
-def fetch_google_news(query, hl, gl, ceid):
-    url = (
-        "https://news.google.com/rss/search"
-        f"?q={requests.utils.quote(query)}&hl={hl}&gl={gl}&ceid={ceid}"
-    )
+def fetch_news(query, hl, gl, ceid):
+    url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl={hl}&gl={gl}&ceid={ceid}"
     cutoff = datetime.now(timezone.utc) - timedelta(days=DAYS_LIMIT)
+    region = "🇰🇷" if gl == "KR" else "🌐"
     try:
         resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
         root = ET.fromstring(resp.content)
         items = []
         for item in root.iter("item"):
-            title   = item.findtext("title", "").strip()
-            link    = item.findtext("link", "").strip()
-            pub_raw = item.findtext("pubDate", "").strip()
+            title     = item.findtext("title", "").strip()
+            link      = item.findtext("link", "").strip()
+            pub_raw   = item.findtext("pubDate", "").strip()
             source_el = item.find("source")
-            source  = source_el.text if source_el is not None else "외신"
-            pub_dt  = parse_pub_date(pub_raw)
+            source    = source_el.text if source_el is not None else ""
+            pub_dt    = parse_pub_date(pub_raw)
             if pub_dt and pub_dt < cutoff:
                 continue
             if is_excluded(title):
                 continue
-            kst = timezone(timedelta(hours=9))
+            kst     = timezone(timedelta(hours=9))
             pub_str = pub_dt.astimezone(kst).strftime("%m/%d %H:%M") if pub_dt else ""
-            region = "🇰🇷" if gl == "KR" else "🇺🇸" if gl == "US" else "🇹🇼" if gl == "TW" else "🇨🇳"
             items.append({
                 "title": title, "link": link, "source": source,
                 "pub": pub_str, "pub_dt": pub_dt,
@@ -163,26 +148,26 @@ def fetch_google_news(query, hl, gl, ceid):
 
 
 def collect_all_news():
-    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 수집 시작")
-    all_articles = []
-    seen_titles = []
+    kst_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=9)))
+    print(f"\n[{kst_now.strftime('%Y-%m-%d %H:%M')} KST] 수집 시작")
 
-    for q, hl, gl, ceid in QUERY_CONFIGS:
-        items = fetch_google_news(q, hl, gl, ceid)
-        new_cnt = 0
-        for a in items:
+    all_articles = []
+    seen_titles  = []
+
+    for q, hl, gl, ceid in ALL_QUERIES:
+        for a in fetch_news(q, hl, gl, ceid):
             if is_duplicate(a["title"], seen_titles):
                 continue
             seen_titles.append(a["title"])
             all_articles.append(a)
-            new_cnt += 1
-        if new_cnt > 0:
-            print(f"  [{q[:18]}] 신규 {new_cnt}건")
         time.sleep(0.3)
 
     all_articles.sort(key=lambda x: x.get("pub_dt") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     result = all_articles[:MAX_RESULTS]
-    print(f"  최종 {len(result)}건")
+
+    kr = sum(1 for a in result if a["region"] == "🇰🇷")
+    gl_cnt = len(result) - kr
+    print(f"  최종 {len(result)}건 (🇰🇷{kr} 🌐{gl_cnt})")
     return result
 
 
@@ -192,13 +177,13 @@ def html_escape(text):
 
 def build_message(items):
     kst_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=9)))
-    today = kst_now.strftime("%Y년 %m월 %d일 %H:%M")
-    kr = sum(1 for i in items if i.get("region") == "🇰🇷")
-    gl = len(items) - kr
+    today   = kst_now.strftime("%Y년 %m월 %d일 %H:%M")
+    kr      = sum(1 for i in items if i.get("region") == "🇰🇷")
+    gl      = len(items) - kr
 
     lines = [
         "📡 <b>공급망 시그널 리포트</b>",
-        f"{today} · 총 {len(items)}건 (🇰🇷{kr} 🌐{gl})",
+        f"{today} KST · 🇰🇷{kr} 🌐{gl}",
         "─" * 22,
     ]
     for item in items:
@@ -226,7 +211,7 @@ def build_message(items):
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    ok = True
+    ok  = True
     for chunk in [message[i:i+4000] for i in range(0, len(message), 4000)]:
         resp = requests.post(
             url,
