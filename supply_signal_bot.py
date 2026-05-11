@@ -1,10 +1,10 @@
 """
-공급망 시그널 텔레그램 봇 v18
+공급망 시그널 텔레그램 봇 v19
 - 한/영 통합 수집, 최신순 정렬
 - 외신 쿼리 en-US 적용
 - KST 시간 표시
 - 고유명사 기반 중복 제거
-- 24시간 이내 이전 기사 중복 제거
+- 24시간 이내 이전 기사 중복 제거 (제목 기준)
 """
 
 import requests
@@ -82,7 +82,7 @@ EN_QUERIES = [
 ALL_QUERIES = KO_QUERIES + EN_QUERIES
 
 
-def load_seen_urls():
+def load_seen_titles():
     if os.path.exists(SEEN_FILE):
         with open(SEEN_FILE, "r") as f:
             data = json.load(f)
@@ -93,7 +93,7 @@ def load_seen_urls():
     return {}
 
 
-def save_seen_urls(seen: dict):
+def save_seen_titles(seen: dict):
     with open(SEEN_FILE, "w") as f:
         json.dump(seen, f)
 
@@ -133,12 +133,6 @@ def extract_keyword(title):
         if k.lower() in title.lower():
             return v
     return "공급망"
-
-
-def extract_entities(title):
-    korean  = set(re.findall(r'[가-힣]{4,}', title))
-    english = set(w.lower() for w in re.findall(r'[A-Za-z]{4,}', title))
-    return korean | english
 
 
 # 일반 공급망 용어 — 고유명사 판단에서 제외
@@ -275,7 +269,7 @@ def build_no_news_message():
         f"{today} KST\n"
         "─" * 22 + "\n\n"
         "🔕 새 기사 없음\n"
-        "이전 1시간 대비 신규 기사가 없습니다.\n\n"
+        "이전 대비 신규 기사가 없습니다.\n\n"
         "─" * 22 + "\n"
         "supply_signal_bot"
     )
@@ -298,7 +292,7 @@ def send_telegram(message):
 
 
 def run_once():
-    seen_urls = load_seen_urls()  # 이전 24시간 기사 불러오기
+    seen_titles = load_seen_titles()  # 이전 24시간 제목 불러오기
 
     items = collect_all_news()
 
@@ -307,8 +301,8 @@ def run_once():
         send_telegram(build_no_news_message())
         return
 
-    # 이전에 보낸 기사 URL 제외
-    new_items = [a for a in items if a["link"] not in seen_urls]
+    # 이전에 보낸 기사 제목 기준으로 제외
+    new_items = [a for a in items if a["title"] not in seen_titles]
 
     if not new_items:
         print("  새 기사 없음 (전부 중복)")
@@ -320,8 +314,8 @@ def run_once():
     if ok:
         now_str = datetime.now(timezone.utc).isoformat()
         for a in new_items:
-            seen_urls[a["link"]] = now_str
-        save_seen_urls(seen_urls)
+            seen_titles[a["title"]] = now_str
+        save_seen_titles(seen_titles)
 
     print(f"  텔레그램 전송 {'완료' if ok else '실패'} ({len(new_items)}건)")
 
