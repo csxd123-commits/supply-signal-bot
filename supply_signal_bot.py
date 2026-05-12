@@ -19,6 +19,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from difflib import SequenceMatcher
 import urllib3
+import html
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import math
 try:
@@ -1055,9 +1056,9 @@ def fetch_naver_news(query: str, category: str, display: int = 20) -> list:
         items = resp.json().get("items", [])
         result = []
         for it in items:
-            title = re.sub(r"<[^>]+>", "", it.get("title", "")).strip()
+            title = html.unescape(re.sub(r"<[^>]+>", "", it.get("title", ""))).strip()
             link  = it.get("originallink") or it.get("link", "")
-            desc  = re.sub(r"<[^>]+>", "", it.get("description", "")).strip()
+            desc  = html.unescape(re.sub(r"<[^>]+>", "", it.get("description", ""))).strip()
             pub   = it.get("pubDate", "")
 
             pub_display = ""
@@ -1156,9 +1157,9 @@ def fetch_rss(source: str, url: str, region: str, ssl_verify: bool = True) -> li
             def _t(tag):
                 el = it.find(tag)
                 return (el.text or "").strip() if el is not None else ""
-            title = _t("title")
+            title = html.unescape(_t("title"))
             link  = _t("link") or _t("guid")
-            desc  = re.sub(r"<[^>]+>", "", _t("description") or _t("summary"))
+            desc  = html.unescape(re.sub(r"<[^>]+>", "", _t("description") or _t("summary")))
             pub   = _t("pubDate") or _t("published") or _t("updated")
             pub_display = _pub_to_kst(pub) if pub else ""
             if not title or not link:
