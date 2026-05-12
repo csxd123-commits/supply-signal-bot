@@ -675,6 +675,192 @@ NAVER_QUERIES = [
 ]
 
 
+# ── Google News 영어 쿼리 ──────────────────────────────────────────────────────
+GOOGLE_QUERIES = [
+    # ── Supply chain / Shortage (범용) ───────────────────────────────────────
+    ("supply chain disruption",     "공급망"),
+    ("component shortage",          "공급망"),
+    ("supply shortage",             "공급망"),
+    ("inventory shortage",          "공급망"),
+    ("parts shortage",              "공급망"),
+    ("supply crunch",               "공급망"),
+    ("power shortage",              "공급망"),
+    ("blackout risk",               "공급망"),
+
+    # ── Semiconductor ─────────────────────────────────────────────────────────
+    ("chip shortage",               "공급망"),
+    ("semiconductor shortage",      "공급망"),
+    ("HBM supply",                  "공급망"),
+    ("DRAM supply shortage",        "공급망"),
+    ("memory chip shortage",        "공급망"),
+    ("wafer shortage",              "원자재"),
+    ("CoWoS supply constraint",     "광통신부품"),
+    ("advanced packaging shortage", "광통신부품"),
+    ("GPU shortage",                "광통신부품"),
+    ("AI chip supply",              "광통신부품"),
+
+    # ── Battery materials ─────────────────────────────────────────────────────
+    ("cathode material shortage",   "배터리소재"),
+    ("anode material shortage",     "배터리소재"),
+    ("copper foil shortage",        "배터리소재"),
+    ("battery separator shortage",  "배터리소재"),
+    ("electrolyte shortage",        "배터리소재"),
+    ("LFP battery supply",          "배터리소재"),
+    ("battery supply chain",        "배터리소재"),
+    ("lithium shortage",            "원자재"),
+
+    # ── Power devices ─────────────────────────────────────────────────────────
+    ("SiC wafer shortage",          "전력반도체"),
+    ("silicon carbide shortage",    "전력반도체"),
+    ("GaN shortage",                "전력반도체"),
+    ("IGBT shortage",               "전력반도체"),
+    ("power semiconductor shortage","전력반도체"),
+
+    # ── Power equipment / Grid ────────────────────────────────────────────────
+    ("transformer shortage",        "전력기기"),
+    ("transformer lead time",       "전력기기"),
+    ("power transformer supply",    "전력기기"),
+    ("grid equipment shortage",     "전력기기"),
+    ("inverter shortage",           "전력기기"),
+
+    # ── Optical / Datacom ─────────────────────────────────────────────────────
+    ("optical transceiver shortage","광통신부품"),
+    ("optical module shortage",     "광통신부품"),
+    ("Lumentum supply",             "광통신부품"),
+    ("Coherent supply shortage",    "광통신부품"),
+
+    # ── Robotics ──────────────────────────────────────────────────────────────
+    ("harmonic drive shortage",     "로봇부품"),
+    ("actuator shortage",           "로봇부품"),
+    ("servo motor shortage",        "로봇부품"),
+    ("robot component shortage",    "로봇부품"),
+    ("humanoid supply chain",       "로봇부품"),
+
+    # ── Auto parts ────────────────────────────────────────────────────────────
+    ("automotive chip shortage",    "자동차부품"),
+    ("MLCC shortage",               "자동차부품"),
+    ("wire harness shortage",       "자동차부품"),
+    ("auto parts shortage",         "자동차부품"),
+
+    # ── Raw materials ─────────────────────────────────────────────────────────
+    ("rare earth shortage",         "원자재"),
+    ("rare earth export ban",       "원자재"),
+    ("critical mineral shortage",   "원자재"),
+    ("lithium supply crunch",       "원자재"),
+    ("cobalt shortage",             "원자재"),
+    ("nickel shortage",             "원자재"),
+    ("copper supply shortage",      "원자재"),
+    ("aluminum supply shortage",    "원자재"),
+    ("gallium germanium export ban","원자재"),
+    ("graphite export ban",         "원자재"),
+    ("LNG supply shortage",         "원자재"),
+    ("natural gas shortage",        "원자재"),
+    ("urea shortage",               "원자재"),
+    ("polysilicon shortage",        "원자재"),
+
+    # ── Defense / Shipbuilding ────────────────────────────────────────────────
+    ("ammunition shortage",         "조선방산"),
+    ("defense supply chain",        "조선방산"),
+    ("drone component shortage",    "조선방산"),
+    ("steel plate shortage",        "조선방산"),
+
+    # ── Hydrogen / Renewables ─────────────────────────────────────────────────
+    ("electrolyzer shortage",       "수소에너지"),
+    ("hydrogen supply chain",       "수소에너지"),
+    ("solar module shortage",       "신재생에너지"),
+    ("wind turbine shortage",       "신재생에너지"),
+    ("blade shortage",              "신재생에너지"),
+
+    # ── Display ───────────────────────────────────────────────────────────────
+    ("OLED material shortage",      "디스플레이"),
+    ("display panel shortage",      "디스플레이"),
+    ("glass substrate shortage",    "디스플레이"),
+
+    # ── Logistics / Freight ───────────────────────────────────────────────────
+    ("freight rate surge",          "물류위기"),
+    ("container shortage",          "물류위기"),
+    ("port congestion",             "물류위기"),
+    ("shipping disruption",         "물류위기"),
+    ("dock strike",                 "물류위기"),
+
+    # ── Tariff / Trade ────────────────────────────────────────────────────────
+    ("tariff hike supply chain",    "관세리스크"),
+    ("export control semiconductor","관세리스크"),
+    ("trade war supply chain",      "관세리스크"),
+    ("reshoring supply chain",      "관세리스크"),
+    ("decoupling supply chain",     "관세리스크"),
+
+    # ── Bottleneck / Lead time ────────────────────────────────────────────────
+    ("lead time increase",          "병목"),
+    ("production halt",             "병목"),
+    ("factory shutdown supply",     "병목"),
+    ("delivery delay shortage",     "병목"),
+
+    # ── Capacity expansion ────────────────────────────────────────────────────
+    ("factory expansion semiconductor","증설"),
+    ("battery gigafactory",         "증설"),
+    ("new fab construction",        "증설"),
+
+    # ── Demand surge ─────────────────────────────────────────────────────────
+    ("demand surge semiconductor",  "수요급증"),
+    ("AI power demand surge",       "수요급증"),
+    ("defense demand surge",        "수요급증"),
+]
+
+
+def fetch_google_news(query: str, category: str, max_items: int = 8) -> list:
+    """Google News RSS 영어 쿼리로 외신 수집"""
+    try:
+        url = (
+            "https://news.google.com/rss/search"
+            f"?q={requests.utils.quote(query)}&hl=en&gl=US&ceid=US:en"
+        )
+        resp = requests.get(
+            url, timeout=10,
+            headers={"User-Agent": "Mozilla/5.0 supply_signal_bot/v27"}
+        )
+        resp.raise_for_status()
+        root = parse_xml_lenient(resp.content)
+        if root is None:
+            return []
+
+        items = root.findall(".//item")
+        result = []
+        for it in items[:max_items]:
+            def _t(tag):
+                el = it.find(tag)
+                return (el.text or "").strip() if el is not None else ""
+            title = _t("title")
+            link  = _t("link") or _t("guid")
+            pub   = _t("pubDate")
+            src_el = it.find("source")
+            source = src_el.text.strip() if src_el is not None else "Google News"
+
+            pub_display = ""
+            try:
+                dt = datetime.strptime(pub.strip(), "%a, %d %b %Y %H:%M:%S %Z")
+                dt = dt.replace(tzinfo=timezone.utc)
+                pub_display = dt.astimezone(timezone(timedelta(hours=9))).strftime("%m/%d %H:%M")
+            except Exception:
+                pass
+
+            if not title or not link:
+                continue
+
+            result.append({
+                "title":   title,
+                "link":    link,
+                "desc":    "",
+                "source":  source,
+                "pub":     pub_display,
+                "region":  "🌐",
+                "keyword": category,
+            })
+        return result
+    except Exception as e:
+        return []
+
+
 # ── RSS 피드 ──────────────────────────────────────────────────────────────────
 # (출처명, URL, region, ssl_verify)
 # ssl_verify=False → 연합뉴스 등 SSL 인증서 오류 우회
@@ -1113,7 +1299,15 @@ def collect_all_news() -> list:
         raw.extend(items)
     print(f"  네이버뉴스: {naver_total}건 (쿼리 {len(NAVER_QUERIES)}개)")
 
-    # ── 해외 RSS 피드 ────────────────────────────────────────────────────────
+    # ── Google News 영어 쿼리 (외신) ───────────────────────────────────────────
+    google_total = 0
+    for query, category in GOOGLE_QUERIES:
+        items = fetch_google_news(query, category, max_items=5)
+        google_total += len(items)
+        raw.extend(items)
+    print(f"  Google뉴스: {google_total}건 (쿼리 {len(GOOGLE_QUERIES)}개)")
+
+    # ── 해외 RSS 피드 (보조) ─────────────────────────────────────────────────
     for source, url, region, ssl_verify in RSS_FEEDS:
         items = fetch_rss(source, url, region, ssl_verify)
         print(f"  {source}: {len(items)}건")
