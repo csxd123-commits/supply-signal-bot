@@ -23,7 +23,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = "8796878101:AAHRbfnsrUZKhX0h4ZneFZcmIV4tzbu_NKo"
-TELEGRAM_CHAT_ID = "1178221090"
+TELEGRAM_CHAT_ID = "-1003984467582"
 SEEN_FILE        = "seen_urls.json"
 MAX_RESULTS      = 20
 SEEN_TTL_HOURS   = 48
@@ -33,6 +33,7 @@ SIM_THRESHOLD    = 0.50
 # ── 키워드 → 카테고리 매핑 (제목 매칭 전용, 복합 구문 위주) ──────────────────
 KEYWORD_MAP = {
     "공급망": [
+        "공급망",
         "공급망 위기", "공급망 차질", "공급망 붕괴", "공급망 리스크",
         "공급 부족", "공급부족", "공급 차질", "공급차질",
         "수급 불안", "수급불안", "수급 차질", "수급차질", "수급 위기",
@@ -53,6 +54,7 @@ KEYWORD_MAP = {
         "demand surge", "demand boom", "demand spike",
     ],
     "증설": [
+        "증설", "증산",
         "공장 증설", "라인 증설", "생산 증설", "설비 증설",
         "공장 준공", "공장 착공", "신규 공장",
         "증설 투자", "증산 계획", "생산능력 확대",
@@ -373,7 +375,28 @@ def collect_all_news() -> list:
         print(f"  {source}: {len(items)}건")
         raw.extend(items)
 
-    filtered = filter_by_keywords(raw)
+    # 24시간 이내 기사만 허용
+    now_utc = datetime.now(timezone.utc)
+    cutoff  = now_utc - timedelta(hours=24)
+    recent  = []
+    for a in raw:
+        pub = a.get("pub", "")
+        if not pub:
+            recent.append(a)   # 날짜 없으면 일단 포함
+            continue
+        try:
+            dt = datetime.strptime(pub, "%m/%d %H:%M")
+            dt = dt.replace(year=now_utc.year, tzinfo=timezone(timedelta(hours=9)))
+            # 연말/연초 경계: 미래 날짜면 작년으로
+            if dt > now_utc + timedelta(hours=1):
+                dt = dt.replace(year=now_utc.year - 1)
+            if dt >= cutoff:
+                recent.append(a)
+        except Exception:
+            recent.append(a)
+    print(f"  24h 필터 후: {len(recent)}건 (전체 {len(raw)}건)")
+
+    filtered = filter_by_keywords(recent)
     print(f"  키워드 매칭: {len(filtered)}건")
 
     deduped = dedupe_within_batch(filtered)
