@@ -1,5 +1,5 @@
 """
-supply_signal_bot v25
+supply_signal_bot v26
 변경사항:
   - [수정] 텔레그램 토큰/챗ID 직접 입력 방식 복원
   - [수정] 404/403/Gone 깨진 RSS 제거
@@ -20,72 +20,358 @@ from datetime import datetime, timezone, timedelta
 from difflib import SequenceMatcher
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+import math
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = "8796878101:AAHRbfnsrUZKhX0h4ZneFZcmIV4tzbu_NKo"
 TELEGRAM_CHAT_ID = "-1003984467582"
+CLAUDE_API_KEY   = "여기에_ANTHROPIC_API_KEY"   # https://console.anthropic.com
 SEEN_FILE        = "seen_urls.json"
 MAX_RESULTS      = 20
 SEEN_TTL_HOURS   = 48
 SIM_THRESHOLD    = 0.50
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── 키워드 → 카테고리 매핑 (제목 매칭 전용, 복합 구문 위주) ──────────────────
+# ── 키워드 → 카테고리 매핑 ─────────────────────────────────────────────────
 KEYWORD_MAP = {
     "공급망": [
-        "공급망",
-        "공급망 위기", "공급망 차질", "공급망 붕괴", "공급망 리스크",
+        # 범용 쇼티지
+        "공급망", "쇼티지", "shortage", "supply chain", "supply crunch",
         "공급 부족", "공급부족", "공급 차질", "공급차질",
-        "수급 불안", "수급불안", "수급 차질", "수급차질", "수급 위기",
-        "재고 부족", "재고부족", "재고 소진",
-        "물량 부족", "물량부족", "물량 확보",
-        "부품 수급", "부품 부족", "부품부족", "부품 조달",
-        "원료 부족", "원료 조달", "소재 부족",
-        "supply chain", "shortage", "supply crunch",
+        "수급 불안", "수급불안", "수급 차질", "수급차질", "수급 위기", "수급 부족",
+        "재고 부족", "재고부족", "재고 소진", "재고 고갈",
+        "물량 부족", "물량부족",
         "수입 차질", "통관 차질",
+        # 반도체·칩
+        "반도체 부족", "반도체 수급", "반도체 공급 차질",
+        "칩 부족", "칩 수급", "chip shortage",
+        "DRAM 부족", "DRAM 수급", "메모리 부족", "메모리 수급",
+        "HBM 부족", "HBM 수급", "HBM 공급",
+        "비메모리 수급", "시스템반도체 부족",
+        # 부품·소재
+        "부품 수급", "부품 부족", "부품부족", "부품 조달",
+        "기판 부족", "기판 수급", "기판 공급 차질",
+        "PCB 부족", "PCB 수급",
+        "전력반도체 부족", "전력반도체 수급",
+        "감속기 부족", "감속기 수급",
+        "모터 부족", "모터 수급",
+        "원료 부족", "소재 부족",
+        # 에너지·전력
+        "전력 부족", "전력난", "전력 수급 위기", "전력 대란",
+        "블랙아웃", "정전 위기",
+        # 의료
         "의료 수급", "의약품 수급", "주사기 재고",
+        # 컨테이너·해운
+        "컨테이너 부족", "컨테이너 수급",
+        # 항만
+        "항만 적체", "항구 혼잡", "port congestion",
     ],
     "수요급증": [
-        "수요 급증", "수요급증", "수요 폭증", "수요폭증", "수요 폭발",
+        "수요 급증", "수요급증", "수요 폭증", "수요폭증",
         "주문 폭주", "주문폭주", "수주 급증", "수주급증",
-        "판매 급증", "판매급증",
-        "AI 수요", "데이터센터 수요", "전력 수요 급증",
-        "구리 수요 급증", "수요 급등",
+        "판매 급증", "수요 급등", "수요 폭발",
         "demand surge", "demand boom", "demand spike",
+        # AI·데이터센터
+        "AI 수요", "데이터센터 수요", "GPU 수요",
+        "HBM 수요 급증", "반도체 수요 급증",
+        # 전력·에너지
+        "전력 수요 급증", "전력 수요 폭증",
+        # 친환경·배터리
+        "전기차 수요 급증", "ESS 수요 급증", "배터리 수요 급증",
+        # 방산
+        "방산 수요", "방위산업 수주 급증", "무기 수요",
     ],
     "증설": [
         "증설", "증산",
-        "공장 증설", "라인 증설", "생산 증설", "설비 증설",
-        "공장 준공", "공장 착공", "신규 공장",
-        "증설 투자", "증산 계획", "생산능력 확대",
-        "팹 증설", "반도체 공장", "배터리 공장",
-        "capacity expansion", "new plant", "new factory",
+        "공장 준공", "공장 착공", "신규 공장", "공장 신설",
+        "팹 증설", "반도체 공장", "배터리 공장", "기가팩토리",
+        "생산능력 확대", "설비 투자", "라인 증설",
+        "capacity expansion", "new plant", "new factory", "gigafactory",
     ],
     "병목": [
         "병목", "bottleneck",
-        "생산 차질", "생산차질", "납기 지연", "납기지연",
-        "리드타임 증가", "리드타임 급등",
-        "공장 가동 중단", "라인 가동 중단",
-        "출하 지연", "배송 지연", "공급 지연",
-        "lead time", "production halt", "factory shutdown",
+        "납기 지연", "납기지연", "납기 차질",
+        "생산 차질", "생산차질",
+        "리드타임", "lead time",
+        "공장 가동 중단", "출하 지연", "배송 지연", "운송 차질",
+        "production halt", "factory shutdown",
+        # 해운·물류 비용
+        "운임 급등", "해상 운임 급등", "컨테이너 운임 급등",
+        "BDI 급등", "물류비 급등", "freight rate",
+        # 파업
+        "항만 파업", "부두 파업", "물류 파업", "철도 파업",
+        "dock strike", "port strike",
+        # 재해·사고
+        "공장 화재", "공장 폭발", "공장 침수",
     ],
     "관세리스크": [
-        "관세 인상", "관세 부과", "관세 폭탄", "관세 충격",
+        "tariff", "trade war", "sanctions", "embargo",
+        "관세 인상", "관세 부과", "관세 폭탄", "관세 충격", "관세 영향",
         "상호관세", "보복관세", "추가관세", "고율관세",
         "트럼프 관세", "미국 관세", "25% 관세",
         "수출 규제", "수출규제", "수출 금지",
-        "무역 규제", "무역 제재", "무역 분쟁", "무역전쟁",
-        "미중 갈등", "미중 분쟁", "반도체 규제",
-        "tariff", "trade war", "export ban", "sanctions", "embargo",
+        "무역 분쟁", "무역전쟁", "무역 제재",
+        "미중 갈등", "미중 분쟁",
+        "반도체 규제", "수입 규제", "대중 제재", "중국 규제",
+        "export ban", "decoupling",
+        # 공급망 재편 정책
+        "IRA", "CHIPS Act", "칩스법",
+        "리쇼어링", "니어쇼어링", "프렌드쇼어링",
+        "공급망 재편", "탈중국",
     ],
     "원자재": [
-        "희토류", "희귀금속", "핵심 광물",
-        "리튬 가격", "리튬 부족", "코발트 가격",
-        "니켈 가격", "구리 가격", "구리 수급",
-        "원자재 가격 급등", "원자재 가격 상승", "원자재 부족",
-        "철광석 가격", "알루미늄 가격",
-        "배터리 소재", "양극재", "음극재",
-        "rare earth", "critical mineral", "lithium shortage",
+        # 광물·금속 위기
+        "희토류 부족", "희토류 수급", "희토류 공급", "희토류 규제", "희토류 수출 금지",
+        "리튬 부족", "리튬 수급", "리튬 공급 차질", "리튬 쇼티지", "리튬 가격 급등",
+        "코발트 부족", "코발트 수급", "코발트 가격 급등",
+        "니켈 부족", "니켈 수급", "니켈 공급 차질", "니켈 가격 급등",
+        "구리 부족", "구리 수급", "구리 공급 차질", "구리 쇼티지",
+        "알루미늄 부족", "알루미늄 수급", "알루미늄 공급 차질",
+        "흑연 수출 금지", "흑연 규제", "흑연 부족",
+        "갈륨 규제", "갈륨 수출 통제", "게르마늄 규제",
+        "텅스텐 수출 금지", "인듐 부족", "몰리브덴 부족",
+        "팔라듐 공급 부족", "팔라듐 수급",
+        "철광석 공급 차질", "원료탄 수급",
+        # 에너지 위기
+        "LNG 수급", "LNG 공급 차질", "LNG 부족", "LNG 대란",
+        "천연가스 부족", "천연가스 수급", "천연가스 공급 차질",
+        "석탄 공급 차질", "석탄 수급 불안",
+        "에너지 대란", "에너지 수급 위기", "에너지 부족",
+        "요소수 부족", "요소수 대란", "요소수 수급",
+        "우라늄 공급", "우라늄 부족",
+        # 반도체·배터리 소재
+        "폴리실리콘 부족", "폴리실리콘 수급",
+        "포토레지스트 부족", "포토레지스트 수급",
+        "불화수소 부족", "불화수소 수급",
+        "실리콘 웨이퍼 부족", "웨이퍼 공급 차질",
+        "배터리 소재 부족", "배터리 소재 수급",
+        "양극재 부족", "양극재 수급 차질",
+        "음극재 부족", "분리막 수급",
+        # 영어
+        "rare earth shortage", "rare earth ban", "rare earth supply",
+        "critical mineral shortage", "mineral supply chain",
+        "lithium shortage", "lithium supply crunch",
+        "cobalt shortage", "nickel shortage",
+        "copper shortage", "copper supply crunch",
+        "polysilicon shortage", "wafer shortage",
+        "LNG shortage", "LNG supply crisis",
+        "natural gas shortage", "energy crisis",
+    ],
+    "물류위기": [
+        "운임 폭등", "해상운임 폭등", "컨테이너 운임 폭등",
+        "운임 급등", "해상 운임", "컨테이너 운임",
+        "BDI 급등", "물류비 폭등",
+        "freight rate surge", "shipping cost",
+        "항만 마비", "항만 혼잡", "항구 마비",
+        "물류 대란", "물류 마비", "물류 차질",
+        "항만 파업", "부두 파업", "물류 파업",
+        "dock strike", "port strike", "logistics strike",
+        "선박 부족", "선복 부족",
+    ],
+
+    # ── 로봇·휴머노이드 ────────────────────────────────────────────────────────
+    "로봇부품": [
+        # 감속기
+        "감속기 부족", "감속기 수급", "감속기 공급 차질", "감속기 납기",
+        "하모닉드라이브 부족", "하모닉드라이브 수급",
+        "harmonic drive 부족", "harmonic drive shortage",
+        "RV감속기 부족", "사이클로이드 감속기 수급",
+        # 액추에이터·모터
+        "액추에이터 부족", "액추에이터 수급", "액추에이터 공급 차질",
+        "서보모터 수급", "서보모터 부족", "서보모터 공급 차질",
+        "리니어모터 수급", "DD모터 수급",
+        # 정밀기계 부품
+        "볼스크류 부족", "볼스크류 수급",
+        "리니어가이드 부족", "리니어가이드 수급",
+        "베어링 부족", "베어링 수급", "베어링 공급 차질",
+        "엔코더 부족", "엔코더 수급",
+        # 로봇 전체
+        "휴머노이드 부품 수급", "로봇 공급망", "로봇 부품 수급",
+        "협동로봇 수급", "산업용 로봇 수급",
+        "robot shortage", "humanoid supply chain",
+    ],
+
+    # ── 전력반도체·화합물반도체 ───────────────────────────────────────────────
+    "전력반도체": [
+        # SiC
+        "SiC 부족", "SiC 수급", "SiC 웨이퍼 부족", "SiC 웨이퍼 수급",
+        "SiC 공급 차질", "탄화규소 부족", "탄화규소 수급",
+        "SiC wafer shortage", "silicon carbide shortage",
+        # GaN
+        "GaN 부족", "GaN 수급", "GaN 공급 차질",
+        "GaN shortage", "gallium nitride shortage",
+        # IGBT·MOSFET
+        "IGBT 부족", "IGBT 수급", "IGBT 공급 차질",
+        "MOSFET 부족", "MOSFET 수급",
+        # 전력반도체 일반
+        "전력반도체 부족", "전력반도체 수급", "전력반도체 공급 차질",
+        "화합물반도체 수급", "화합물반도체 부족",
+        "power semiconductor shortage",
+    ],
+
+    # ── 배터리·소재 ───────────────────────────────────────────────────────────
+    "배터리소재": [
+        # 셀·팩
+        "배터리 셀 부족", "배터리 셀 수급", "배터리 팩 수급",
+        "배터리 공급 차질", "battery shortage", "battery supply chain",
+        # 양극재
+        "양극재 부족", "양극재 수급", "양극재 공급 차질",
+        "NCM 수급", "NCM 부족", "NCA 수급", "NCA 부족",
+        "LFP 수급", "LFP 부족", "LFP 공급 차질", "LFP shortage",
+        # 음극재
+        "음극재 부족", "음극재 수급", "음극재 공급 차질",
+        "천연흑연 수급", "인조흑연 수급",
+        # 분리막
+        "분리막 부족", "분리막 수급", "분리막 공급 차질",
+        "separator shortage",
+        # 동박·알박
+        "동박 부족", "동박 수급", "동박 공급 차질",
+        "알박 부족", "알박 수급", "알루미늄박 수급",
+        "전지박 수급", "전지박 부족",
+        "copper foil shortage",
+        # 전해액·전해질
+        "전해액 부족", "전해액 수급", "전해액 공급 차질",
+        "전해질 부족", "전해질 수급",
+        "electrolyte shortage",
+        # 바인더·도전재
+        "바인더 수급", "도전재 수급", "CNT 수급",
+        "NMP 수급", "NMP 부족",
+        # 전고체·차세대
+        "전고체 배터리 소재", "전고체 소재 부족",
+        "나트륨 배터리 수급", "나트륨이온 배터리",
+        "solid state battery shortage",
+    ],
+
+    # ── 전력기기·그리드 ───────────────────────────────────────────────────────
+    "전력기기": [
+        # 변압기
+        "변압기 부족", "변압기 수급", "변압기 납기 지연",
+        "고압 변압기 부족", "변압기 공급 차질", "변압기 대란",
+        "초고압 변압기 수급", "배전 변압기 부족",
+        "transformer shortage", "transformer lead time", "transformer supply",
+        # 차단기·개폐기
+        "차단기 수급", "차단기 부족",
+        "GIS 수급", "GIS 부족", "가스절연개폐장치 수급",
+        "개폐기 수급", "수배전반 수급",
+        # 인버터
+        "인버터 부족", "인버터 수급", "인버터 공급 차질",
+        "PCS 수급", "PCS 부족",
+        # 케이블·부스바
+        "전력케이블 수급", "전력케이블 부족",
+        "부스바 수급", "부스바 부족",
+        "HVDC 장비 수급",
+        # 전력기기 일반
+        "전력기기 수급", "전력기기 부족",
+        "그리드 장비 부족", "송전 설비 수급",
+        "전력설비 공급 차질",
+    ],
+
+    # ── 광통신·데이터센터 부품 ────────────────────────────────────────────────
+    "광통신부품": [
+        # 광트랜시버·모듈
+        "광트랜시버 부족", "광트랜시버 수급", "광트랜시버 공급 차질",
+        "광모듈 수급", "광모듈 부족", "광모듈 공급 차질",
+        "transceiver shortage", "optical module shortage",
+        "800G 트랜시버 수급", "400G 트랜시버 수급",
+        # 광케이블·부품
+        "광케이블 부족", "광케이블 수급",
+        "광섬유 부족", "광섬유 수급",
+        "VCSEL 수급", "DFB 레이저 수급",
+        # 패키징
+        "CoWoS 공급 차질", "CoWoS 부족", "CoWoS 수급",
+        "HBM 패키징 부족", "첨단 패키징 수급",
+        "advanced packaging shortage",
+        "SoIC 수급", "칩렛 수급",
+        # AI 인프라 부품
+        "ASIC 부족", "ASIC 수급",
+        "NPU 수급", "AI칩 수급", "AI칩 부족",
+        "GPU 부족", "GPU 수급", "GPU shortage",
+    ],
+
+    # ── 자동차 부품 ───────────────────────────────────────────────────────────
+    "자동차부품": [
+        # 차량용 반도체
+        "차량용 반도체 부족", "차량용 반도체 수급", "차량용 반도체 공급 차질",
+        "automotive chip shortage", "automotive semiconductor",
+        # 수동부품
+        "MLCC 부족", "MLCC 수급", "MLCC 공급 차질",
+        "MLCC shortage",
+        # 센서·카메라
+        "라이다 수급", "라이다 부족",
+        "카메라모듈 수급", "카메라모듈 부족",
+        "레이더 부품 수급",
+        # 와이어하네스·커넥터
+        "와이어하네스 수급", "와이어하네스 부족",
+        "커넥터 수급", "커넥터 부족",
+        # 완성차
+        "자동차 부품 수급", "자동차 부품 부족",
+        "완성차 생산 차질", "완성차 공급 차질",
+    ],
+
+    # ── 수소·신에너지 ─────────────────────────────────────────────────────────
+    "수소에너지": [
+        "수소 공급 차질", "수소 수급", "수소 부족",
+        "전해조 수급", "전해조 부족", "전해조 공급 차질",
+        "수전해 설비 수급",
+        "연료전지 부품 수급", "연료전지 공급 차질",
+        "수소 공급망", "청정수소 수급",
+        "MEA 수급", "MEA 부족",
+        "hydrogen shortage", "electrolyzer shortage",
+        "fuel cell shortage",
+    ],
+
+    # ── 풍력·태양광 ───────────────────────────────────────────────────────────
+    "신재생에너지": [
+        # 태양광
+        "태양광 모듈 수급", "태양광 모듈 부족", "태양광 공급 차질",
+        "폴리실리콘 수급", "폴리실리콘 부족",
+        "태양전지 수급", "셀 수급",
+        "solar module shortage", "solar supply chain",
+        # 풍력
+        "풍력 부품 수급", "풍력 부품 부족", "풍력 타워 수급",
+        "블레이드 수급", "블레이드 부족",
+        "풍력 발전기 수급", "나셀 수급",
+        "wind turbine shortage", "blade shortage",
+        # 공통
+        "풍력 공급망", "태양광 공급망",
+        "재생에너지 부품 수급",
+    ],
+
+    # ── 조선·방산 ─────────────────────────────────────────────────────────────
+    "조선방산": [
+        # 조선 소재
+        "후판 수급", "후판 부족", "후판 공급 차질",
+        "강판 수급", "강판 부족",
+        # 조선 기자재
+        "조선 부품 수급", "선박 부품 부족", "선박 기자재 수급",
+        "엔진 수급", "선박 엔진 수급",
+        "프로펠러 수급", "프로펠러 부족",
+        "해양플랜트 부품 수급",
+        # 방산
+        "방산 부품 수급", "방산 공급망", "방산 부품 부족",
+        "방산 소재 수급", "방산 소재 부족",
+        "탄약 수급", "탄약 부족", "탄약 공급 차질",
+        "무기 공급 차질", "방위산업 공급 차질",
+        "미사일 부품 수급", "드론 부품 수급",
+        "defense supply chain", "ammunition shortage",
+        "defense component shortage",
+    ],
+
+    # ── 디스플레이 ────────────────────────────────────────────────────────────
+    "디스플레이": [
+        # OLED 소재
+        "OLED 소재 수급", "OLED 소재 부족",
+        "발광재료 수급", "발광재료 부족",
+        "OLED material shortage",
+        # 부품
+        "편광판 수급", "편광판 부족",
+        "백라이트 수급", "BLU 수급",
+        "드라이버IC 수급", "드라이버IC 부족", "DDIC 수급", "DDIC 부족",
+        "디스플레이 부품 수급", "디스플레이 공급 차질",
+        # 유리·기판
+        "유리기판 수급", "유리기판 부족",
+        "글라스 수급", "글라스 부족",
+        "display shortage", "panel shortage",
     ],
 }
 
@@ -98,9 +384,76 @@ BLACKLIST = [
     "화장품 점검", "식품 점검", "위생 점검",
     "불량률 감소", "품질 향상",
     "결혼", "출산", "인구",
+    "수급 안정", "수급 회복", "수급 정상",
 ]
 
-CATEGORY_PRIORITY = ["병목", "공급망", "관세리스크", "원자재", "수요급증", "증설"]
+CATEGORY_PRIORITY = ["병목", "물류위기", "공급망", "전력반도체", "광통신부품", "자동차부품", "배터리소재", "전력기기", "로봇부품", "조선방산", "수소에너지", "신재생에너지", "디스플레이", "관세리스크", "원자재", "수요급증", "증설"]
+
+# ── 글로벌 핵심 기업 리스트 ───────────────────────────────────────────────────
+# 기업명이 제목에 있고, 공급망 맥락어도 동시에 있을 때만 잡힘
+GLOBAL_COMPANIES = {
+    # 반도체 파운드리·장비
+    "반도체": [
+        "TSMC", "ASML", "Lam Research", "Applied Materials", "Tokyo Electron",
+        "Intel Foundry", "GlobalFoundries", "UMC",
+    ],
+    # AI·GPU
+    "수요급증": [
+        "NVIDIA", "AMD", "Broadcom", "Marvell", "Qualcomm",
+    ],
+    # 광통신·데이터센터
+    "광통신부품": [
+        "Lumentum", "Coherent", "Corning", "Ciena", "Fabrinet",
+        "II-VI", "Inphi",
+    ],
+    # 배터리
+    "배터리소재": [
+        "CATL", "Panasonic", "LG Energy", "Samsung SDI", "SK On",
+        "QuantumScape", "Solid Power",
+    ],
+    # 전력·에너지
+    "수소에너지": [
+        "Bloom Energy", "Plug Power", "Nel Hydrogen", "ITM Power",
+        "Ballard Power",
+    ],
+    # 풍력·태양광
+    "신재생에너지": [
+        "Vestas", "Siemens Energy", "GE Vernova", "First Solar",
+        "Enphase", "SolarEdge",
+    ],
+    # 전력반도체
+    "전력반도체": [
+        "Wolfspeed", "Onsemi", "ON Semiconductor", "STMicroelectronics",
+        "Infineon", "Rohm",
+    ],
+    # 전력기기
+    "전력기기": [
+        "Eaton", "ABB", "Siemens", "Schneider Electric",
+        "Hitachi Energy", "GE Grid",
+    ],
+    # 자동차·모빌리티
+    "자동차부품": [
+        "Tesla", "Rivian", "BYD", "CATL", "Aptiv",
+        "Continental", "Bosch",
+    ],
+    # 로봇
+    "로봇부품": [
+        "Fanuc", "Yaskawa", "Harmonic Drive", "Nabtesco",
+        "Figure AI", "Boston Dynamics", "1X Technologies",
+    ],
+    # 조선·방산
+    "조선방산": [
+        "Lockheed Martin", "RTX", "Raytheon", "Northrop Grumman",
+        "L3Harris", "BAE Systems",
+    ],
+}
+
+# 공급망 맥락어 (기업명과 함께 있을 때만 잡음)
+COMPANY_CONTEXT_KEYWORDS = [
+    "공급", "수급", "부족", "차질", "지연", "증설", "감산", "중단",
+    "shortage", "supply", "delay", "halt", "cut", "expand", "shortage",
+    "disruption", "constraint", "bottleneck", "capacity",
+]
 
 # ── RSS 피드 ──────────────────────────────────────────────────────────────────
 # (출처명, URL, region, ssl_verify)
@@ -349,9 +702,93 @@ def fetch_rss(source: str, url: str, region: str, ssl_verify: bool = True) -> li
         return []
 
 
+def classify_with_claude(articles: list) -> list:
+    """
+    Claude API로 기사 제목 배치 분류.
+    공급망·쇼티지·원자재·관세·수요급증·증설 관련 기사만 추출.
+    30건씩 배치 처리.
+    """
+    if not articles:
+        return []
+    if CLAUDE_API_KEY == "여기에_ANTHROPIC_API_KEY":
+        print("  [Claude API] API 키 미설정 → 키워드 필터만 사용")
+        return articles  # API 키 없으면 그냥 통과
+
+    BATCH = 30
+    result = []
+
+    for i in range(0, len(articles), BATCH):
+        batch = articles[i:i+BATCH]
+        lines = "\n".join(
+            f"{j+1}. {a['title']}" for j, a in enumerate(batch)
+        )
+        prompt = f"""아래 뉴스 기사 제목 목록을 분석해서, 다음 중 하나 이상에 해당하는 기사 번호와 카테고리를 JSON으로만 반환해줘.
+
+분류 기준:
+- 공급망: 부품/소재/원료/의약품 공급 부족·차질·수급 불안
+- 병목: 납기 지연, 생산 차질, 리드타임 증가, 공장 가동 중단
+- 수요급증: 특정 품목·산업의 수요/주문 급증·폭증
+- 증설: 공장 착공·준공·생산능력 확대·투자 발표
+- 관세리스크: 관세 인상·무역 규제·수출입 제재
+- 원자재: 원자재·광물·에너지 가격 급등락·수급 불안
+
+제외 기준 (아래는 무조건 제외):
+- 일반 주가/증시 등락, 기업 실적 발표
+- 인사/채용/수상/표창
+- 농수산물 가격 (배추, 양파, 수산물 등)
+- 정치/외교 일반 뉴스 (공급망 영향 없는 것)
+- 소비자 대상 마케팅/세일/프로모션
+
+기사 목록:
+{lines}
+
+응답 형식 (JSON만, 설명 없이):
+[{{"index": 1, "category": "공급망"}}, {{"index": 3, "category": "관세리스크"}}]
+
+관련 없는 기사가 하나도 없으면: []"""
+
+        try:
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key":         CLAUDE_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type":      "application/json",
+                },
+                json={
+                    "model":      "claude-haiku-4-5-20251001",
+                    "max_tokens": 1000,
+                    "messages":   [{"role": "user", "content": prompt}],
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            text = resp.json()["content"][0]["text"].strip()
+            # JSON 추출
+            s, e = text.find("["), text.rfind("]")
+            if s < 0:
+                continue
+            classified = json.loads(text[s:e+1])
+            for c in classified:
+                idx = c.get("index", 0) - 1
+                if 0 <= idx < len(batch):
+                    batch[idx]["keyword"] = c.get("category", "공급망")
+                    result.append(batch[idx])
+            print(f"  [Claude API] 배치 {i//BATCH+1}: {len(batch)}건 → {len([c for c in classified])}건 선별")
+        except Exception as ex:
+            print(f"  [Claude API] 오류: {ex} → 해당 배치 키워드 필터 결과 사용")
+            result.extend(batch)
+
+    return result
+
+
+
 def filter_by_keywords(articles: list) -> list:
-    all_kws = [kw for kws in KEYWORD_MAP.values() for kw in kws]
-    result  = []
+    all_kws   = [kw for kws in KEYWORD_MAP.values() for kw in kws]
+    all_cos   = [(cat, co) for cat, cos in GLOBAL_COMPANIES.items() for co in cos]
+    ctx_lower = [c.lower() for c in COMPANY_CONTEXT_KEYWORDS]
+    result    = []
+
     for a in articles:
         title = a["title"].lower()
 
@@ -359,10 +796,20 @@ def filter_by_keywords(articles: list) -> list:
         if any(bl.lower() in title for bl in BLACKLIST):
             continue
 
-        # 2) 제목에서만 키워드 매칭 (desc 제외)
+        # 2) 일반 키워드 매칭
         if any(kw.lower() in title for kw in all_kws):
             a["keyword"] = get_category(a["title"])
             result.append(a)
+            continue
+
+        # 3) 글로벌 기업명 + 공급망 맥락어 동시 매칭
+        for cat, co in all_cos:
+            if co.lower() in title:
+                if any(ctx in title for ctx in ctx_lower):
+                    a["keyword"] = cat
+                    result.append(a)
+                    break
+
     return result
 
 
@@ -396,8 +843,13 @@ def collect_all_news() -> list:
             recent.append(a)
     print(f"  24h 필터 후: {len(recent)}건 (전체 {len(raw)}건)")
 
-    filtered = filter_by_keywords(recent)
-    print(f"  키워드 매칭: {len(filtered)}건")
+    # 1차: 키워드 광범위 필터 (블랙리스트 + 느슨한 키워드)
+    pre = filter_by_keywords(recent)
+    print(f"  1차 키워드 필터: {len(pre)}건")
+
+    # 2차: Claude API 정밀 분류
+    filtered = classify_with_claude(pre)
+    print(f"  2차 Claude 분류: {len(filtered)}건")
 
     deduped = dedupe_within_batch(filtered)
     print(f"  배치 중복 제거 후: {len(deduped)}건")
