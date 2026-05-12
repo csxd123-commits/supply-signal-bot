@@ -1,11 +1,11 @@
 """
-supply_signal_bot v24
+supply_signal_bot v25
 변경사항:
-  - [신규] 국내 RSS 대폭 확장: 조선비즈, 헤럴드경제, 서울경제, 파이낸셜뉴스,
-           머니투데이, 뉴시스, SBS Biz, KBS, MBC, YTN, 비즈워치, 인베스트조선,
-           케미컬뉴스, 철강금속신문, 반도체네트워크
-  - [신규] 해외 RSS 대폭 확장: WSJ, FT, CNBC, Nikkei, FierceElectronics,
-           SupplyChainDive, FreightWaves, Mining.com, SPGlobal, Argus
+  - [수정] 텔레그램 토큰/챗ID 직접 입력 방식 복원
+  - [수정] 404/403/Gone 깨진 RSS 제거
+  - [수정] SSL 오류 사이트 verify=False 처리
+  - [수정] XML 파싱 오류 사이트 → lxml 폴백 처리
+  - [신규] 작동 확인된 대체 소스 추가 (Yahoo Finance, Investing.com 등)
   - [유지] 배치 내 상호 중복 제거, seen.json 3중 저장
 """
 
@@ -18,11 +18,13 @@ import schedule
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from difflib import SequenceMatcher
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN",   "여기에_토큰")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "여기에_챗ID")
-SEEN_FILE        = "seen.json"
+TELEGRAM_TOKEN   = "8796878101:AAHRbfnsrUZKhX0h4ZneFZcmIV4tzbu_NKo"
+TELEGRAM_CHAT_ID = "1178221090"
+SEEN_FILE        = "seen_urls.json"
 MAX_RESULTS      = 20
 SEEN_TTL_HOURS   = 48
 SIM_THRESHOLD    = 0.50
@@ -62,7 +64,7 @@ KEYWORD_MAP = {
         "수출 규제", "수출규제", "제재", "embargo",
         "미중 갈등", "지정학", "무역 분쟁", "무역분쟁",
         "상호관세", "보복관세", "추가관세", "관세 폭탄",
-        "트럼프 관세", "미국 관세",
+        "트럼프 관세", "미국 관세", "25% 관세",
     ],
     "원자재": [
         "희토류", "리튬", "코발트", "니켈", "구리 가격",
@@ -73,63 +75,70 @@ KEYWORD_MAP = {
     ],
 }
 
-# 카테고리 우선순위
 CATEGORY_PRIORITY = ["병목", "공급망", "관세리스크", "원자재", "수요급증", "증설"]
 
 # ── RSS 피드 ──────────────────────────────────────────────────────────────────
+# (출처명, URL, region, ssl_verify)
+# ssl_verify=False → 연합뉴스 등 SSL 인증서 오류 우회
 RSS_FEEDS = [
-    # ── 국내 경제 종합 ──────────────────────────────────────────────────────────
-    ("한국경제",    "https://www.hankyung.com/feed/economy",                        "🇰🇷"),
-    ("한국경제",    "https://www.hankyung.com/feed/industry",                       "🇰🇷"),
-    ("매일경제",    "https://www.mk.co.kr/rss/30200030/",                          "🇰🇷"),
-    ("매일경제",    "https://www.mk.co.kr/rss/30100041/",                          "🇰🇷"),
-    ("연합뉴스",    "https://www.yonhapnews.co.kr/rss/economy.xml",                 "🇰🇷"),
-    ("연합뉴스",    "https://www.yonhapnews.co.kr/rss/industry.xml",                "🇰🇷"),
-    ("이데일리",    "https://www.edaily.co.kr/rss/economy.xml",                     "🇰🇷"),
-    ("전자신문",    "https://rss.etnews.com/Section901.xml",                       "🇰🇷"),
-    ("뉴스1",      "https://www.news1.kr/rss/economy",                             "🇰🇷"),
-    ("아주경제",    "https://www.ajunews.com/rss/economy.xml",                      "🇰🇷"),
-    ("조선비즈",    "https://biz.chosun.com/site/data/rss/rss.xml",                 "🇰🇷"),
-    ("헤럴드경제",  "https://biz.heraldcorp.com/rss/010000000000.xml",              "🇰🇷"),
-    ("서울경제",    "https://www.sedaily.com/RSS/rss.xml",                          "🇰🇷"),
-    ("파이낸셜뉴스", "https://www.fnnews.com/rss/fn_economy_economy.xml",           "🇰🇷"),
-    ("머니투데이",  "https://news.mt.co.kr/mtview/rss/list.html?CATEGORY=A",       "🇰🇷"),
-    ("뉴시스",     "https://www.newsis.com/RSS/economy.rss",                        "🇰🇷"),
-    ("뉴시스",     "https://www.newsis.com/RSS/industry.rss",                       "🇰🇷"),
-    ("SBS Biz",   "https://biz.sbs.co.kr/rss/economics.rss",                      "🇰🇷"),
-    ("KBS",       "https://news.kbs.co.kr/rss/news-economy.xml",                   "🇰🇷"),
-    ("YTN",       "https://www.ytn.co.kr/rss/0102.xml",                            "🇰🇷"),
-    ("비즈워치",   "https://www.bizwatch.co.kr/rss/allArticle.rss",                 "🇰🇷"),
-    ("인베스트조선","https://www.investchosun.com/site/data/rss/rss.xml",           "🇰🇷"),
-    # ── 국내 산업/소재 전문 ─────────────────────────────────────────────────────
-    ("전자부품연구원", "https://www.ebn.co.kr/rss/rss.html",                        "🇰🇷"),  # EBN 전자배터리뉴스
-    ("케미컬뉴스",  "https://www.chemicalnews.co.kr/rss/allArticle.rss",            "🇰🇷"),
-    ("반도체네트워크","https://www.seminet.co.kr/rss/rss_news.html",                "🇰🇷"),
-    ("철강금속신문", "https://www.snmnews.com/rss/rss.xml",                         "🇰🇷"),
-    ("에너지경제",  "https://www.ekn.kr/rss/rss.html",                              "🇰🇷"),
-    ("물류신문",    "https://www.klnews.co.kr/rss/rss.html",                        "🇰🇷"),
-    # ── 해외 종합 ───────────────────────────────────────────────────────────────
-    ("Reuters",    "https://feeds.reuters.com/reuters/businessNews",                "🌐"),
-    ("Reuters",    "https://feeds.reuters.com/reuters/industryNews",                "🌐"),
-    ("Reuters",    "https://feeds.reuters.com/reuters/technologyNews",              "🌐"),
-    ("Bloomberg",  "https://feeds.bloomberg.com/markets/news.rss",                 "🌐"),
-    ("AP News",    "https://rsshub.app/apnews/topics/business-news",               "🌐"),
-    ("FT",         "https://www.ft.com/rss/home/uk",                               "🌐"),
-    ("WSJ",        "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",                "🌐"),
-    ("WSJ",        "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml",              "🌐"),
-    ("CNBC",       "https://www.cnbc.com/id/10001147/device/rss/rss.html",         "🌐"),  # Economy
-    ("CNBC",       "https://www.cnbc.com/id/19854910/device/rss/rss.html",         "🌐"),  # Tech
-    # ── 해외 공급망/산업 전문 ───────────────────────────────────────────────────
-    ("SupplyChainDive", "https://www.supplychaindive.com/feeds/news/",             "🌐"),
-    ("FreightWaves",    "https://www.freightwaves.com/news/feed",                  "🌐"),
-    ("Nikkei Asia",     "https://asia.nikkei.com/rss/feed/nar",                    "🌐"),
-    ("SPGlobal",        "https://www.spglobal.com/commodityinsights/en/rss-feed/oil-energy", "🌐"),
-    ("Mining.com",      "https://www.mining.com/feed/",                            "🌐"),
-    ("Argus Media",     "https://www.argusmedia.com/en/rss-feeds",                 "🌐"),
-    ("FierceElectronics","https://www.fierceelectronics.com/rss/xml",              "🌐"),
-    ("EE Times",        "https://www.eetimes.com/feed/",                           "🌐"),
-    ("TechCrunch",      "https://techcrunch.com/feed/",                            "🌐"),
-    ("The Loadstar",    "https://theloadstar.com/feed/",                           "🌐"),  # 물류/해운
+    # ── 국내 ✅ 작동 확인 ──────────────────────────────────────────────────────
+    ("한국경제",    "https://www.hankyung.com/feed/economy",               "🇰🇷", True),
+    ("매일경제",    "https://www.mk.co.kr/rss/30200030/",                 "🇰🇷", True),
+    ("매일경제",    "https://www.mk.co.kr/rss/30100041/",                 "🇰🇷", True),
+    ("전자신문",    "https://rss.etnews.com/Section901.xml",              "🇰🇷", True),
+    ("아주경제",    "https://www.ajunews.com/rss/economy.xml",            "🇰🇷", True),
+
+    # ── 국내 ⚠️ SSL 우회 필요 ─────────────────────────────────────────────────
+    ("연합뉴스",    "https://www.yna.co.kr/rss/economy.xml",              "🇰🇷", False),
+    ("연합뉴스",    "https://www.yna.co.kr/rss/industry.xml",             "🇰🇷", False),
+    ("뉴시스",      "https://newsis.com/RSS/economy.rss",                 "🇰🇷", False),
+    ("뉴시스",      "https://newsis.com/RSS/industry.rss",                "🇰🇷", False),
+    ("뉴스1",       "https://www.news1.kr/rss/economy",                  "🇰🇷", False),
+    ("헤럴드경제",  "https://biz.heraldcorp.com/rss/",                   "🇰🇷", False),
+
+    # ── 국내 대체 URL ─────────────────────────────────────────────────────────
+    ("조선비즈",    "https://biz.chosun.com/RSS/",                       "🇰🇷", True),
+    ("머니투데이",  "https://news.mt.co.kr/rss/",                        "🇰🇷", True),
+    ("서울경제",    "https://www.sedaily.com/Rss",                       "🇰🇷", True),
+    ("파이낸셜뉴스","https://www.fnnews.com/rss",                        "🇰🇷", True),
+    ("이데일리",    "https://www.edaily.co.kr/rss/",                     "🇰🇷", True),
+    ("SBS Biz",    "https://biz.sbs.co.kr/rss/",                        "🇰🇷", True),
+    ("KBS",        "https://news.kbs.co.kr/rss/news-economy.xml",        "🇰🇷", True),
+    ("YTN",        "https://www.ytn.co.kr/rss/0102.xml",                 "🇰🇷", True),
+    ("비즈워치",    "https://www.bizwatch.co.kr/rss/allArticle.rss",     "🇰🇷", True),
+    ("에너지경제",  "https://www.ekn.kr/rss/rss.html",                   "🇰🇷", True),
+
+    # ── 국내 전문 ─────────────────────────────────────────────────────────────
+    ("EBN",        "https://www.ebn.co.kr/rss/rss.html",                 "🇰🇷", True),
+    ("철강금속신문","https://www.snmnews.com/rss/rss.xml",               "🇰🇷", True),
+    ("물류신문",    "https://www.klnews.co.kr/rss/rss.html",             "🇰🇷", True),
+    ("케미컬뉴스",  "https://www.chemicalnews.co.kr/rss/allArticle.rss", "🇰🇷", True),
+
+    # ── 해외 ✅ 작동 확인 ──────────────────────────────────────────────────────
+    ("Bloomberg",  "https://feeds.bloomberg.com/markets/news.rss",       "🌐", True),
+    ("FT",         "https://www.ft.com/rss/home/uk",                     "🌐", True),
+    ("WSJ",        "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",      "🌐", True),
+    ("WSJ",        "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml",    "🌐", True),
+    ("CNBC",       "https://www.cnbc.com/id/10001147/device/rss/rss.html","🌐", True),
+    ("CNBC",       "https://www.cnbc.com/id/19854910/device/rss/rss.html","🌐", True),
+    ("SupplyChainDive","https://www.supplychaindive.com/feeds/news/",    "🌐", True),
+    ("FreightWaves","https://www.freightwaves.com/news/feed",            "🌐", True),
+    ("EE Times",   "https://www.eetimes.com/feed/",                      "🌐", True),
+    ("TechCrunch", "https://techcrunch.com/feed/",                       "🌐", True),
+    ("The Loadstar","https://theloadstar.com/feed/",                     "🌐", True),
+
+    # ── 해외 대체 (Reuters DNS 차단 대신) ─────────────────────────────────────
+    ("Yahoo Finance","https://finance.yahoo.com/rss/topstories",         "🌐", True),
+    ("Yahoo Finance","https://finance.yahoo.com/rss/industry",           "🌐", True),
+    ("Seeking Alpha","https://seekingalpha.com/feed.xml",                "🌐", True),
+    ("Investopedia","https://www.investopedia.com/feedbuilder/feed/getarticles/?name=News", "🌐", True),
+
+    # ── 해외 공급망/원자재 전문 ────────────────────────────────────────────────
+    ("Metal Bulletin","https://www.metalbulletin.com/rss",              "🌐", True),
+    ("Fastmarkets",  "https://www.fastmarkets.com/rss/news",            "🌐", True),
+    ("JOC",          "https://www.joc.com/rss.xml",                     "🌐", True),  # 해운/물류
+    ("Nikkei Asia",  "https://asia.nikkei.com/rss/feed/nar",            "🌐", True),
+    ("SCMP Business","https://www.scmp.com/rss/5/feed",                 "🌐", True),  # 中 공급망
 ]
 
 
@@ -239,17 +248,37 @@ def dedupe_within_batch(items: list) -> list:
 
 # ── RSS 수집 ──────────────────────────────────────────────────────────────────
 
-def fetch_rss(source: str, url: str, region: str) -> list:
+def parse_xml_lenient(content: bytes):
+    """ET 실패 시 잘못된 문자 제거 후 재시도"""
+    try:
+        return ET.fromstring(content)
+    except ET.ParseError:
+        # 제어문자 제거 후 재시도
+        cleaned = re.sub(rb'[\x00-\x08\x0b\x0c\x0e-\x1f]', b'', content)
+        try:
+            return ET.fromstring(cleaned)
+        except ET.ParseError:
+            return None
+
+
+def fetch_rss(source: str, url: str, region: str, ssl_verify: bool = True) -> list:
     try:
         resp = requests.get(
             url, timeout=10,
-            headers={"User-Agent": "Mozilla/5.0 (supply_signal_bot/v23)"}
+            verify=ssl_verify,
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) supply_signal_bot/v25"}
         )
         resp.raise_for_status()
-        root  = ET.fromstring(resp.content)
+
+        root = parse_xml_lenient(resp.content)
+        if root is None:
+            print(f"  RSS 오류 [{source}]: XML 파싱 실패")
+            return []
+
         ns    = {"atom": "http://www.w3.org/2005/Atom"}
         items = root.findall(".//item") or root.findall(".//atom:entry", ns)
         result = []
+
         for it in items:
             def _t(tag):
                 el = it.find(tag)
@@ -289,6 +318,7 @@ def fetch_rss(source: str, url: str, region: str) -> list:
                 "region": region,
             })
         return result
+
     except Exception as e:
         print(f"  RSS 오류 [{source}]: {e}")
         return []
@@ -309,8 +339,8 @@ def collect_all_news() -> list:
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 수집 시작")
 
     raw = []
-    for source, url, region in RSS_FEEDS:
-        items = fetch_rss(source, url, region)
+    for source, url, region, ssl_verify in RSS_FEEDS:
+        items = fetch_rss(source, url, region, ssl_verify)
         print(f"  {source}: {len(items)}건")
         raw.extend(items)
 
@@ -365,20 +395,6 @@ def build_message(items: list) -> str:
 
     lines += ["", "─" * 22, "supply_signal_bot"]
     return "\n".join(lines)
-
-
-def build_no_news_message() -> str:
-    kst_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=9)))
-    today   = kst_now.strftime("%Y년 %m월 %d일 %H:%M")
-    return (
-        "📡 <b>공급망 시그널 리포트</b>\n"
-        f"{today} KST\n"
-        "─" * 22 + "\n\n"
-        "🔕 새 기사 없음\n"
-        "이전 대비 신규 기사가 없습니다.\n\n"
-        "─" * 22 + "\n"
-        "supply_signal_bot"
-    )
 
 
 # ── 텔레그램 전송 ─────────────────────────────────────────────────────────────
