@@ -1,5 +1,5 @@
 """
-supply_signal_bot v26
+supply_signal_bot v27
 변경사항:
   - [수정] 텔레그램 토큰/챗ID 직접 입력 방식 복원
   - [수정] 404/403/Gone 깨진 RSS 제거
@@ -21,11 +21,18 @@ from difflib import SequenceMatcher
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import math
+try:
+    import feedparser
+    HAS_FEEDPARSER = True
+except ImportError:
+    HAS_FEEDPARSER = False
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = "8796878101:AAHRbfnsrUZKhX0h4ZneFZcmIV4tzbu_NKo"
 TELEGRAM_CHAT_ID = "-1003984467582"
 CLAUDE_API_KEY   = "여기에_ANTHROPIC_API_KEY"   # https://console.anthropic.com
+NAVER_CLIENT_ID  = "WQHg_9Xr2Jn8dxEx1GnN"
+NAVER_CLIENT_SECRET = "H2P2y94ZxM"
 SEEN_FILE        = "seen_urls.json"
 MAX_RESULTS      = 20
 SEEN_TTL_HOURS   = 48
@@ -392,12 +399,16 @@ BLACKLIST = [
     "불량률 감소", "품질 향상",
     "결혼", "출산", "인구",
     "수급 안정", "수급 회복", "수급 정상",
-    # 공급망 무관 지정학·전쟁 뉴스
-    "이란 휴전", "이란 전쟁", "이란 평화", "이란 핵",
+    # 이란·중동 전쟁 노이즈
+    "Iran", "이란 휴전", "이란 전쟁", "이란 평화", "이란 핵",
     "ceasefire", "peace plan", "money-laundering",
     "war crime", "far-right", "AfD", "BRICS",
+    # 금융·투자 노이즈
     "hedge fund", "gold price", "silver price",
-    "baby boutique", "cargo chief",
+    "markets wrap", "morning squawk", "market open",
+    # HR·일반 노이즈
+    "baby boutique", "cargo chief", "new role",
+    "earnings", "quarterly results", "profit",
 ]
 
 CATEGORY_PRIORITY = ["병목", "물류위기", "공급망", "전력반도체", "광통신부품", "자동차부품", "배터리소재", "전력기기", "로봇부품", "조선방산", "수소에너지", "신재생에너지", "디스플레이", "관세리스크", "원자재", "수요급증", "증설"]
@@ -468,6 +479,66 @@ COMPANY_CONTEXT_KEYWORDS = [
     "disruption", "constraint", "bottleneck", "capacity",
 ]
 
+# ── 네이버 뉴스 검색 키워드 ─────────────────────────────────────────────────
+# 카테고리별 검색어 → 네이버 뉴스 API로 최신 기사 수집
+NAVER_QUERIES = [
+    # 공급망·쇼티지
+    ("공급망 차질",    "공급망"),
+    ("공급 부족",      "공급망"),
+    ("수급 불안",      "공급망"),
+    ("재고 부족",      "공급망"),
+    ("부품 수급",      "공급망"),
+    # 반도체
+    ("반도체 수급",    "공급망"),
+    ("HBM 수급",       "공급망"),
+    ("차량용 반도체",  "자동차부품"),
+    # 배터리 소재
+    ("양극재 수급",    "배터리소재"),
+    ("동박 수급",      "배터리소재"),
+    ("분리막 수급",    "배터리소재"),
+    ("LFP 공급",       "배터리소재"),
+    # 전력기기
+    ("변압기 부족",    "전력기기"),
+    ("변압기 수급",    "전력기기"),
+    ("인버터 수급",    "전력기기"),
+    # 전력반도체
+    ("SiC 웨이퍼",     "전력반도체"),
+    ("GaN 수급",       "전력반도체"),
+    ("IGBT 수급",      "전력반도체"),
+    # 광통신
+    ("광트랜시버 수급","광통신부품"),
+    ("CoWoS 수급",     "광통신부품"),
+    # 로봇
+    ("감속기 수급",    "로봇부품"),
+    ("액추에이터 수급","로봇부품"),
+    # 원자재
+    ("희토류 규제",    "원자재"),
+    ("요소수 수급",    "원자재"),
+    ("LNG 수급",       "원자재"),
+    ("천연가스 부족",  "원자재"),
+    # 관세·무역
+    ("관세 인상",      "관세리스크"),
+    ("수출 규제",      "관세리스크"),
+    ("미중 갈등",      "관세리스크"),
+    ("트럼프 관세",    "관세리스크"),
+    # 병목
+    ("납기 지연",      "병목"),
+    ("생산 차질",      "병목"),
+    # 증설
+    ("공장 증설",      "증설"),
+    ("공장 준공",      "증설"),
+    # 수요급증
+    ("수요 급증",      "수요급증"),
+    ("수주 급증",      "수요급증"),
+    # 조선·방산
+    ("후판 수급",      "조선방산"),
+    ("방산 부품",      "조선방산"),
+    # 에너지
+    ("전력난",         "공급망"),
+    ("에너지 대란",    "원자재"),
+]
+
+
 # ── RSS 피드 ──────────────────────────────────────────────────────────────────
 # (출처명, URL, region, ssl_verify)
 # ssl_verify=False → 연합뉴스 등 SSL 인증서 오류 우회
@@ -482,28 +553,28 @@ RSS_FEEDS = [
     # ── 국내 ⚠️ SSL 우회 필요 ─────────────────────────────────────────────────
     ("연합뉴스",    "https://www.yna.co.kr/rss/economy.xml",              "🇰🇷", False),
     ("연합뉴스",    "https://www.yna.co.kr/rss/industry.xml",             "🇰🇷", False),
-    ("뉴시스",      "https://newsis.com/RSS/economy.rss",                 "🇰🇷", False),
-    ("뉴시스",      "https://newsis.com/RSS/industry.rss",                "🇰🇷", False),
+    ("뉴시스",      "https://newsis.com/rss/economy.xml",                 "🇰🇷", False),
+    ("뉴시스",      "https://newsis.com/rss/industry.xml",                "🇰🇷", False),
     ("뉴스1",       "https://www.news1.kr/rss/economy",                  "🇰🇷", False),
     ("헤럴드경제",  "https://biz.heraldcorp.com/rss/",                   "🇰🇷", False),
 
     # ── 국내 대체 URL ─────────────────────────────────────────────────────────
-    ("조선비즈",    "https://biz.chosun.com/RSS/",                       "🇰🇷", True),
-    ("머니투데이",  "https://news.mt.co.kr/rss/",                        "🇰🇷", True),
-    ("서울경제",    "https://www.sedaily.com/Rss",                       "🇰🇷", True),
-    ("파이낸셜뉴스","https://www.fnnews.com/rss",                        "🇰🇷", True),
-    ("이데일리",    "https://www.edaily.co.kr/rss/",                     "🇰🇷", True),
+    ("조선비즈",    "https://biz.chosun.com/rss/rss.xml",                "🇰🇷", True),
+    ("머니투데이",  "https://www.mt.co.kr/rss/",                         "🇰🇷", True),
+    ("서울경제",    "https://www.sedaily.com/RSS/rssMain.xml",           "🇰🇷", True),
+    ("파이낸셜뉴스","https://www.fnnews.com/rss/fn_news_headline.xml",   "🇰🇷", True),
+    ("이데일리",    "https://www.edaily.co.kr/rss/newsflash.xml",        "🇰🇷", True),
     ("SBS Biz",    "https://biz.sbs.co.kr/rss/",                        "🇰🇷", True),
-    ("KBS",        "https://news.kbs.co.kr/rss/news-economy.xml",        "🇰🇷", True),
-    ("YTN",        "https://www.ytn.co.kr/rss/0102.xml",                 "🇰🇷", True),
-    ("비즈워치",    "https://www.bizwatch.co.kr/rss/allArticle.rss",     "🇰🇷", True),
-    ("에너지경제",  "https://www.ekn.kr/rss/rss.html",                   "🇰🇷", True),
+    ("KBS",        "https://news.kbs.co.kr/rss/rss.xml",                "🇰🇷", True),
+    ("YTN",        "https://www.ytn.co.kr/rss/all.xml",                 "🇰🇷", True),
+    ("비즈워치",    "https://www.bizwatch.co.kr/rss/",                   "🇰🇷", True),
+    ("에너지경제",  "https://www.ekn.kr/rss/allCategory.xml",            "🇰🇷", True),
 
     # ── 국내 전문 ─────────────────────────────────────────────────────────────
-    ("EBN",        "https://www.ebn.co.kr/rss/rss.html",                 "🇰🇷", True),
-    ("철강금속신문","https://www.snmnews.com/rss/rss.xml",               "🇰🇷", True),
-    ("물류신문",    "https://www.klnews.co.kr/rss/rss.html",             "🇰🇷", True),
-    ("케미컬뉴스",  "https://www.chemicalnews.co.kr/rss/allArticle.rss", "🇰🇷", True),
+    ("EBN",        "https://www.ebn.co.kr/rss/",                        "🇰🇷", True),
+    ("철강금속신문","https://www.snmnews.com/rss/",                      "🇰🇷", True),
+    ("물류신문",    "https://www.klnews.co.kr/rss/",                     "🇰🇷", True),
+    ("케미컬뉴스",  "https://www.chemicalnews.co.kr/rss/allArticle.rss","🇰🇷", False),
 
     # ── 해외 ✅ 작동 확인 ──────────────────────────────────────────────────────
     ("Bloomberg",  "https://feeds.bloomberg.com/markets/news.rss",       "🌐", True),
@@ -519,17 +590,9 @@ RSS_FEEDS = [
     ("The Loadstar","https://theloadstar.com/feed/",                     "🌐", True),
 
     # ── 해외 대체 (Reuters DNS 차단 대신) ─────────────────────────────────────
-    ("Yahoo Finance","https://finance.yahoo.com/rss/topstories",         "🌐", True),
-    ("Yahoo Finance","https://finance.yahoo.com/rss/industry",           "🌐", True),
-    ("Seeking Alpha","https://seekingalpha.com/feed.xml",                "🌐", True),
-    ("Investopedia","https://www.investopedia.com/feedbuilder/feed/getarticles/?name=News", "🌐", True),
-
     # ── 해외 공급망/원자재 전문 ────────────────────────────────────────────────
-    ("Metal Bulletin","https://www.metalbulletin.com/rss",              "🌐", True),
-    ("Fastmarkets",  "https://www.fastmarkets.com/rss/news",            "🌐", True),
     ("JOC",          "https://www.joc.com/rss.xml",                     "🌐", True),  # 해운/물류
     ("Nikkei Asia",  "https://asia.nikkei.com/rss/feed/nar",            "🌐", True),
-    ("SCMP Business","https://www.scmp.com/rss/5/feed",                 "🌐", True),  # 中 공급망
 ]
 
 
@@ -652,64 +715,137 @@ def parse_xml_lenient(content: bytes):
             return None
 
 
-def fetch_rss(source: str, url: str, region: str, ssl_verify: bool = True) -> list:
+def fetch_naver_news(query: str, category: str, display: int = 20) -> list:
+    """네이버 뉴스 검색 API로 기사 수집"""
+    if not NAVER_CLIENT_ID or NAVER_CLIENT_ID == "여기에_NAVER_CLIENT_ID":
+        return []
     try:
         resp = requests.get(
-            url, timeout=10,
-            verify=ssl_verify,
-            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) supply_signal_bot/v25"}
+            "https://openapi.naver.com/v1/search/news.json",
+            headers={
+                "X-Naver-Client-Id":     NAVER_CLIENT_ID,
+                "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+            },
+            params={"query": query, "display": display, "sort": "date"},
+            timeout=10,
         )
         resp.raise_for_status()
-
-        root = parse_xml_lenient(resp.content)
-        if root is None:
-            print(f"  RSS 오류 [{source}]: XML 파싱 실패")
-            return []
-
-        ns    = {"atom": "http://www.w3.org/2005/Atom"}
-        items = root.findall(".//item") or root.findall(".//atom:entry", ns)
+        items = resp.json().get("items", [])
         result = []
-
         for it in items:
-            def _t(tag):
-                el = it.find(tag)
-                return (el.text or "").strip() if el is not None else ""
-
-            title = _t("title")
-            link  = _t("link") or _t("guid")
-            desc  = re.sub(r"<[^>]+>", "", _t("description") or _t("summary"))
-            pub   = _t("pubDate") or _t("published") or _t("updated")
+            title = re.sub(r"<[^>]+>", "", it.get("title", "")).strip()
+            link  = it.get("originallink") or it.get("link", "")
+            desc  = re.sub(r"<[^>]+>", "", it.get("description", "")).strip()
+            pub   = it.get("pubDate", "")
 
             pub_display = ""
-            for fmt in [
-                "%a, %d %b %Y %H:%M:%S %z",
-                "%a, %d %b %Y %H:%M:%S GMT",
-                "%Y-%m-%dT%H:%M:%S%z",
-                "%Y-%m-%dT%H:%M:%SZ",
-            ]:
-                try:
-                    dt = datetime.strptime(pub.strip(), fmt)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    kst = dt.astimezone(timezone(timedelta(hours=9)))
-                    pub_display = kst.strftime("%m/%d %H:%M")
-                    break
-                except Exception:
-                    pass
+            try:
+                dt = datetime.strptime(pub, "%a, %d %b %Y %H:%M:%S %z")
+                pub_display = dt.astimezone(timezone(timedelta(hours=9))).strftime("%m/%d %H:%M")
+            except Exception:
+                pass
 
             if not title or not link:
                 continue
 
             result.append({
-                "title":  title,
-                "link":   link,
-                "desc":   desc,
-                "source": source,
-                "pub":    pub_display,
-                "region": region,
+                "title":   title,
+                "link":    link,
+                "desc":    desc,
+                "source":  "네이버뉴스",
+                "pub":     pub_display,
+                "region":  "🇰🇷",
+                "keyword": category,
             })
         return result
+    except Exception as e:
+        print(f"  네이버 오류 [{query}]: {e}")
+        return []
 
+
+def _pub_to_kst(pub_str: str) -> str:
+    for fmt in [
+        "%a, %d %b %Y %H:%M:%S %z",
+        "%a, %d %b %Y %H:%M:%S GMT",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%SZ",
+    ]:
+        try:
+            dt = datetime.strptime(pub_str.strip(), fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone(timedelta(hours=9))).strftime("%m/%d %H:%M")
+        except Exception:
+            pass
+    return ""
+
+
+def fetch_rss(source: str, url: str, region: str, ssl_verify: bool = True) -> list:
+    # ── feedparser 우선 시도 (관대한 파싱) ───────────────────────────────────
+    if HAS_FEEDPARSER:
+        try:
+            import ssl as _ssl
+            ctx = None if ssl_verify else _ssl._create_unverified_context()
+            fd  = feedparser.parse(url, handlers=[] if ssl_verify else
+                  [feedparser.api._build_urllib2_request(url)])
+            # feedparser는 SSL 설정이 어려우므로 requests로 content 받아서 파싱
+            resp = requests.get(
+                url, timeout=10, verify=ssl_verify,
+                headers={"User-Agent": "Mozilla/5.0 supply_signal_bot/v26"}
+            )
+            resp.raise_for_status()
+            fd = feedparser.parse(resp.content)
+            result = []
+            for entry in fd.entries:
+                title = entry.get("title", "").strip()
+                link  = entry.get("link", "") or entry.get("id", "")
+                desc  = re.sub(r"<[^>]+>", "", entry.get("summary", ""))
+                pub   = entry.get("published", "") or entry.get("updated", "")
+                pub_display = _pub_to_kst(pub) if pub else ""
+                if not title or not link:
+                    continue
+                result.append({
+                    "title":  title,
+                    "link":   link,
+                    "desc":   desc,
+                    "source": source,
+                    "pub":    pub_display,
+                    "region": region,
+                })
+            return result
+        except Exception as e:
+            pass  # feedparser 실패 시 ET로 폴백
+
+    # ── ET 폴백 ──────────────────────────────────────────────────────────────
+    try:
+        resp = requests.get(
+            url, timeout=10, verify=ssl_verify,
+            headers={"User-Agent": "Mozilla/5.0 supply_signal_bot/v26"}
+        )
+        resp.raise_for_status()
+        root = parse_xml_lenient(resp.content)
+        if root is None:
+            print(f"  RSS 오류 [{source}]: XML 파싱 실패")
+            return []
+        ns    = {"atom": "http://www.w3.org/2005/Atom"}
+        items = root.findall(".//item") or root.findall(".//atom:entry", ns)
+        result = []
+        for it in items:
+            def _t(tag):
+                el = it.find(tag)
+                return (el.text or "").strip() if el is not None else ""
+            title = _t("title")
+            link  = _t("link") or _t("guid")
+            desc  = re.sub(r"<[^>]+>", "", _t("description") or _t("summary"))
+            pub   = _t("pubDate") or _t("published") or _t("updated")
+            pub_display = _pub_to_kst(pub) if pub else ""
+            if not title or not link:
+                continue
+            result.append({
+                "title":  title, "link": link, "desc": desc,
+                "source": source, "pub": pub_display, "region": region,
+            })
+        return result
     except Exception as e:
         print(f"  RSS 오류 [{source}]: {e}")
         return []
@@ -809,13 +945,18 @@ def filter_by_keywords(articles: list) -> list:
         if any(bl.lower() in title for bl in BLACKLIST):
             continue
 
-        # 2) 일반 키워드 매칭
+        # 2) 네이버 API 수집 기사는 이미 키워드 분류 완료 → 바로 포함
+        if a.get("source") == "네이버뉴스" and a.get("keyword"):
+            result.append(a)
+            continue
+
+        # 3) 일반 키워드 매칭 (RSS 기사)
         if any(kw.lower() in title for kw in all_kws):
             a["keyword"] = get_category(a["title"])
             result.append(a)
             continue
 
-        # 3) 글로벌 기업명 + 공급망 맥락어 동시 매칭
+        # 4) 글로벌 기업명 + 공급망 맥락어 동시 매칭
         for cat, co in all_cos:
             if co.lower() in title:
                 if any(ctx in title for ctx in ctx_lower):
@@ -830,6 +971,16 @@ def collect_all_news() -> list:
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 수집 시작")
 
     raw = []
+
+    # ── 네이버 뉴스 API (국내 키워드별 검색) ────────────────────────────────
+    naver_total = 0
+    for query, category in NAVER_QUERIES:
+        items = fetch_naver_news(query, category, display=10)
+        naver_total += len(items)
+        raw.extend(items)
+    print(f"  네이버뉴스: {naver_total}건 (쿼리 {len(NAVER_QUERIES)}개)")
+
+    # ── 해외 RSS 피드 ────────────────────────────────────────────────────────
     for source, url, region, ssl_verify in RSS_FEEDS:
         items = fetch_rss(source, url, region, ssl_verify)
         print(f"  {source}: {len(items)}건")
