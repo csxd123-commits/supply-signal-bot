@@ -391,24 +391,40 @@ KEYWORD_MAP = {
 
 # 제목에 이 단어 포함 시 무조건 제외
 BLACKLIST = [
+    # 수상·인사
     "훈장", "수훈", "표창", "포상", "시상",
-    "채용", "모집", "교육생", "인턴", "취업",
-    "주가", "코스피", "코스닥",
+    "대표이사 선임", "임원 선임", "그룹장 선임", "사장 취임",
+    "부사장 선임", "전무 선임", "CEO 선임",
+    "채용", "교육생", "인턴", "취업",
+    # 실적·금융
+    "영업이익", "영업손실", "순이익", "매출액",
+    "1분기", "2분기", "3분기", "4분기",          # 실적발표 필터
+    "주가 상승", "주가 하락", "주가 급등", "주가 급락",
+    "코스피", "코스닥",
+    "유상증자", "무상증자", "자사주", "배당",
+    "목표가", "투자의견",
+    "ETF 수익률", "펀드 수익률", "수익률",
+    # 정치·선거
+    "후보", "토론회", "선거", "국회", "의원",
+    # 농수산·소비재
     "채소", "농산물", "배추", "양파", "사과 값", "과일 값",
     "화장품 점검", "식품 점검", "위생 점검",
+    "할인", "프로모션", "이벤트 출시",
+    # 기타 노이즈
     "불량률 감소", "품질 향상",
     "결혼", "출산", "인구",
+    "안전점검", "안전 점검",
+    "경기 회복", "경기 진단",
     "수급 안정", "수급 회복", "수급 정상",
-    # 이란·중동 전쟁 노이즈
+    # 지정학·전쟁
     "Iran", "이란 휴전", "이란 전쟁", "이란 평화", "이란 핵",
     "ceasefire", "peace plan", "money-laundering",
     "war crime", "far-right", "AfD", "BRICS",
-    # 금융·투자 노이즈
+    # 해외 금융 노이즈
     "hedge fund", "gold price", "silver price",
     "markets wrap", "morning squawk", "market open",
-    # HR·일반 노이즈
+    "earnings", "quarterly results",
     "baby boutique", "cargo chief", "new role",
-    "earnings", "quarterly results", "profit",
 ]
 
 CATEGORY_PRIORITY = ["병목", "물류위기", "공급망", "전력반도체", "광통신부품", "자동차부품", "배터리소재", "전력기기", "로봇부품", "조선방산", "수소에너지", "신재생에너지", "디스플레이", "관세리스크", "원자재", "수요급증", "증설"]
@@ -945,18 +961,15 @@ def filter_by_keywords(articles: list) -> list:
         if any(bl.lower() in title for bl in BLACKLIST):
             continue
 
-        # 2) 네이버 API 수집 기사는 이미 키워드 분류 완료 → 바로 포함
-        if a.get("source") == "네이버뉴스" and a.get("keyword"):
-            result.append(a)
-            continue
-
-        # 3) 일반 키워드 매칭 (RSS 기사)
+        # 2) 제목 기반 키워드 매칭 (네이버 포함 전체 동일 적용)
         if any(kw.lower() in title for kw in all_kws):
-            a["keyword"] = get_category(a["title"])
+            # 네이버 기사는 카테고리 유지, RSS는 새로 분류
+            if not a.get("keyword") or a.get("source") != "네이버뉴스":
+                a["keyword"] = get_category(a["title"])
             result.append(a)
             continue
 
-        # 4) 글로벌 기업명 + 공급망 맥락어 동시 매칭
+        # 3) 글로벌 기업명 + 공급망 맥락어 동시 매칭
         for cat, co in all_cos:
             if co.lower() in title:
                 if any(ctx in title for ctx in ctx_lower):
