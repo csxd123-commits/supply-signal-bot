@@ -105,19 +105,26 @@ KEYWORD_MAP = {
         "공장 화재", "공장 폭발", "공장 침수",
     ],
     "관세리스크": [
-        "tariff", "trade war", "sanctions", "embargo",
+        # 관세 (한국어)
         "관세 인상", "관세 부과", "관세 폭탄", "관세 충격", "관세 영향",
         "상호관세", "보복관세", "추가관세", "고율관세",
-        "트럼프 관세", "미국 관세", "25% 관세",
+        "트럼프 관세", "미국 관세", "25% 관세", "10% 관세",
+        # 무역 규제
         "수출 규제", "수출규제", "수출 금지",
         "무역 분쟁", "무역전쟁", "무역 제재",
         "미중 갈등", "미중 분쟁",
-        "반도체 규제", "수입 규제", "대중 제재", "중국 규제",
-        "export ban", "decoupling",
-        # 공급망 재편 정책
+        "반도체 수출 규제", "반도체 규제", "수입 규제",
+        "대중 제재", "중국 규제", "중국산 규제",
+        # 공급망 재편
         "IRA", "CHIPS Act", "칩스법",
         "리쇼어링", "니어쇼어링", "프렌드쇼어링",
         "공급망 재편", "탈중국",
+        # 영어 (맥락 있는 복합어만)
+        "tariff hike", "tariff increase", "tariff war", "trade war",
+        "export ban", "export control", "import ban",
+        "trade sanction", "chip sanction", "semiconductor sanction",
+        "tech embargo", "chip embargo",
+        "decoupling", "friend-shoring", "reshoring",
     ],
     "원자재": [
         # 광물·금속 위기
@@ -385,6 +392,12 @@ BLACKLIST = [
     "불량률 감소", "품질 향상",
     "결혼", "출산", "인구",
     "수급 안정", "수급 회복", "수급 정상",
+    # 공급망 무관 지정학·전쟁 뉴스
+    "이란 휴전", "이란 전쟁", "이란 평화", "이란 핵",
+    "ceasefire", "peace plan", "money-laundering",
+    "war crime", "far-right", "AfD", "BRICS",
+    "hedge fund", "gold price", "silver price",
+    "baby boutique", "cargo chief",
 ]
 
 CATEGORY_PRIORITY = ["병목", "물류위기", "공급망", "전력반도체", "광통신부품", "자동차부품", "배터리소재", "전력기기", "로봇부품", "조선방산", "수소에너지", "신재생에너지", "디스플레이", "관세리스크", "원자재", "수요급증", "증설"]
