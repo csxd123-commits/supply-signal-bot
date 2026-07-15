@@ -1381,7 +1381,7 @@ def build_message(items: list) -> str:
         lines.append(f"\n{region} <b>#{kw}</b>")
         if url:
             url_safe = url.replace("&", "&amp;")
-lines.append(f'<a href="{url_safe}">{title}</a>')
+            lines.append(f'<a href="{url_safe}">{title}</a>')
         else:
             lines.append(f"<b>{title}</b>")
 
