@@ -932,6 +932,7 @@ def title_fingerprint(title: str) -> str:
 
 
 def html_escape(text: str) -> str:
+    text = re.sub(r'<[^>]+>', '', text)  # HTML 태그 제거
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
@@ -1379,7 +1380,8 @@ def build_message(items: list) -> str:
 
         lines.append(f"\n{region} <b>#{kw}</b>")
         if url:
-            lines.append(f'<a href="{url}">{title}</a>')
+            url_safe = url.replace("&", "&amp;")
+lines.append(f'<a href="{url_safe}">{title}</a>')
         else:
             lines.append(f"<b>{title}</b>")
 
